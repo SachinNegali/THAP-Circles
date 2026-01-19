@@ -1,15 +1,15 @@
-import mongoose from 'mongoose';
+import mongoose, { Types } from 'mongoose';
 
 const messageSchema = new mongoose.Schema(
   {
     group: {
-      type: mongoose.Schema.Types.ObjectId,
+      type: Types.ObjectId,
       ref: 'Group',
       required: true,
       index: true,
     },
     sender: {
-      type: mongoose.Schema.Types.ObjectId,
+      type: Types.ObjectId,
       ref: 'User',
       required: true,
     },
@@ -20,11 +20,11 @@ const messageSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ['text', 'image', 'file', 'system'],
+      enum: ['text', 'image', 'file', 'system', 'spend'],
       default: 'text',
     },
     metadata: {
-      type: mongoose.Schema.Types.Mixed,
+      type: Types.Mixed,
       default: {},
     },
     isDeleted: {
@@ -37,7 +37,7 @@ const messageSchema = new mongoose.Schema(
     },
     readBy: [
       {
-        type: mongoose.Schema.Types.ObjectId,
+        type: Types.ObjectId,
         ref: 'User',
       },
     ],

@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { Types } from 'mongoose';
 
 const groupSchema = new mongoose.Schema(
   {
@@ -18,14 +18,14 @@ const groupSchema = new mongoose.Schema(
       default: null,
     },
     createdBy: {
-      type: mongoose.Schema.Types.ObjectId,
+      type: Types.ObjectId,
       ref: 'User',
       required: true,
     },
     members: [
       {
         user: {
-          type: mongoose.Schema.Types.ObjectId,
+          type: Types.ObjectId,
           ref: 'User',
           required: true,
         },
