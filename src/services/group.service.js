@@ -2,6 +2,7 @@ import httpStatus from 'http-status';
 import Group from '../models/group.model.js';
 import User from '../models/user.model.js';
 import Message from '../models/message.model.js';
+import * as notificationService from './notification.service.js';
 
 /**
  * Create a new group
@@ -52,6 +53,22 @@ export const createGroup = async (name, description, creatorId, memberIds = []) 
     content: `${creator.fName} created the group`,
     type: 'system',
   });
+
+  // Notify added members about group creation
+  if (memberIds.length > 0) {
+    await notificationService.createNotifications(
+      memberIds,
+      'group.invite',
+      'Group Invitation',
+      `${creator.fName} added you to ${group.name}`,
+      {
+        groupId: group._id,
+        groupName: group.name,
+        invitedBy: creatorId,
+        inviterName: `${creator.fName} ${creator.lName}`,
+      }
+    );
+  }
 
   return group.populate('members.user', 'fName lName email');
 };
@@ -153,6 +170,24 @@ export const updateGroupInfo = async (groupId, userId, updates) => {
   group.lastActivity = new Date();
   await group.save();
 
+  // Notify all members about group info update
+  const memberIds = group.members.map((m) => m.user);
+  const updater = await User.findById(userId);
+
+  await notificationService.createNotifications(
+    memberIds,
+    'group.updated',
+    'Group Updated',
+    `${updater.fName} updated ${group.name}`,
+    {
+      groupId: group._id,
+      groupName: group.name,
+      updatedBy: userId,
+      updaterName: `${updater.fName} ${updater.lName}`,
+      updates: Object.keys(updates),
+    }
+  );
+
   return group.populate('members.user', 'fName lName email');
 };
 
@@ -201,6 +236,20 @@ export const addMembers = async (groupId, userId, memberIds) => {
     type: 'system',
   });
 
+  // Notify newly added members
+  await notificationService.createNotifications(
+    memberIds,
+    'group.invite',
+    'Group Invitation',
+    `${adder.fName} added you to ${group.name}`,
+    {
+      groupId: group._id,
+      groupName: group.name,
+      invitedBy: userId,
+      inviterName: `${adder.fName} ${adder.lName}`,
+    }
+  );
+
   return group.populate('members.user', 'fName lName email');
 };
 
@@ -245,6 +294,48 @@ export const removeMember = async (groupId, userId, targetUserId) => {
     type: 'system',
   });
 
+  // Notify the removed user
+  const notificationType = isSelfRemoval ? 'group.member_left' : 'group.member_removed';
+  const notificationTitle = isSelfRemoval ? 'Left Group' : 'Removed from Group';
+  const notificationMessage = isSelfRemoval
+    ? `You left ${group.name}`
+    : `${remover.fName} removed you from ${group.name}`;
+
+  await notificationService.createNotification(
+    targetUserId,
+    notificationType,
+    notificationTitle,
+    notificationMessage,
+    {
+      groupId: group._id,
+      groupName: group.name,
+      removedBy: userId,
+      removerName: `${remover.fName} ${remover.lName}`,
+    }
+  );
+
+  // Notify remaining members if not self-removal
+  if (!isSelfRemoval) {
+    const remainingMemberIds = group.members
+      .filter((m) => m.user.toString() !== targetUserId.toString())
+      .map((m) => m.user);
+
+    if (remainingMemberIds.length > 0) {
+      await notificationService.createNotifications(
+        remainingMemberIds,
+        'group.member_removed',
+        'Member Removed',
+        `${remover.fName} removed ${removed.fName} from ${group.name}`,
+        {
+          groupId: group._id,
+          groupName: group.name,
+          removedUserId: targetUserId,
+          removedUserName: `${removed.fName} ${removed.lName}`,
+        }
+      );
+    }
+  }
+
   return group.populate('members.user', 'fName lName email');
 };
 
@@ -284,6 +375,21 @@ export const updateMemberRole = async (groupId, userId, targetUserId, newRole) =
     type: 'system',
   });
 
+  // Notify the user whose role was changed
+  await notificationService.createNotification(
+    targetUserId,
+    'group.role_updated',
+    'Role Updated',
+    `${changer.fName} made you ${newRole === 'admin' ? 'an admin' : 'a member'} in ${group.name}`,
+    {
+      groupId: group._id,
+      groupName: group.name,
+      newRole,
+      changedBy: userId,
+      changerName: `${changer.fName} ${changer.lName}`,
+    }
+  );
+
   return group.populate('members.user', 'fName lName email');
 };
 
@@ -316,6 +422,23 @@ export const deleteGroup = async (groupId, userId) => {
 
   group.isActive = false;
   await group.save();
+
+  // Notify all members about group deletion
+  const memberIds = group.members.map((m) => m.user);
+  const deleter = await User.findById(userId);
+
+  await notificationService.createNotifications(
+    memberIds,
+    'group.deleted',
+    'Group Deleted',
+    `${deleter.fName} deleted ${group.name}`,
+    {
+      groupId: group._id,
+      groupName: group.name,
+      deletedBy: userId,
+      deleterName: `${deleter.fName} ${deleter.lName}`,
+    }
+  );
 
   return group;
 };

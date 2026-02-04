@@ -118,3 +118,9 @@ dist
 # Build artifacts
 build/
 dist/
+
+
+
+# .postman_collection
+.postman_collection.json
+.README_POSTMAN.md

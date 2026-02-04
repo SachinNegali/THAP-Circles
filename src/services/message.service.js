@@ -1,6 +1,7 @@
 import Message from '../models/message.model.js';
 import Group from '../models/group.model.js';
 import User from '../models/user.model.js';
+import * as notificationService from './notification.service.js';
 
 /**
  * Send a message to a group
@@ -39,7 +40,59 @@ export const sendMessage = async (groupId, senderId, content, type = 'text', met
   group.lastActivity = new Date();
   await group.save();
 
-  return message.populate('sender', 'fName lName email');
+  // Populate sender info
+  await message.populate('sender', 'fName lName email');
+
+  // Send notifications to all group members except sender
+  const recipientIds = group.members
+    .filter((member) => member.user.toString() !== senderId.toString())
+    .map((member) => member.user);
+
+  if (recipientIds.length > 0) {
+    const sender = await User.findById(senderId);
+    const contentPreview = content.length > 50 ? content.substring(0, 50) + '...' : content;
+
+    // Create notifications for all recipients
+    const notifications = await notificationService.createNotifications(
+      recipientIds,
+      'message.new',
+      `${sender.fName} in ${group.name}`,
+      contentPreview,
+      {
+        groupId: group._id,
+        groupName: group.name,
+        messageId: message._id,
+        senderId: sender._id,
+        senderName: `${sender.fName} ${sender.lName}`,
+      }
+    );
+
+    // Track delivery: mark message as delivered to users who received notification via SSE
+    const deliveredUserIds = notifications
+      .filter((notif) => notif.isDelivered)
+      .map((notif) => notif.user);
+
+    if (deliveredUserIds.length > 0) {
+      for (const userId of deliveredUserIds) {
+        await message.markAsDeliveredTo(userId);
+      }
+
+      // Send delivery receipt to sender
+      await notificationService.createNotification(
+        senderId,
+        'message.delivered',
+        'Message delivered',
+        `Your message was delivered to ${deliveredUserIds.length} member(s)`,
+        {
+          messageId: message._id,
+          groupId: group._id,
+          deliveredCount: deliveredUserIds.length,
+        }
+      );
+    }
+  }
+
+  return message;
 };
 
 /**
@@ -115,6 +168,25 @@ export const deleteMessage = async (messageId, userId) => {
   }
 
   await message.softDelete();
+
+  // Notify all group members about deletion
+  if (group) {
+    const recipientIds = group.members.map((member) => member.user);
+    const deleter = await User.findById(userId);
+
+    await notificationService.createNotifications(
+      recipientIds,
+      'message.deleted',
+      `Message deleted in ${group.name}`,
+      `${deleter.fName} deleted a message`,
+      {
+        groupId: group._id,
+        groupName: group.name,
+        messageId: message._id,
+      }
+    );
+  }
+
   return message;
 };
 
@@ -132,11 +204,31 @@ export const markAsRead = async (messageId, userId) => {
   }
 
   // Verify user is a member of the group
-  const group = await Group.findById(message.group);
-  if (!group || !group.isMember(userId)) {
+  const messageGroup = await Group.findById(message.group);
+  if (!messageGroup || !messageGroup.isMember(userId)) {
     throw new Error('You are not a member of this group');
   }
 
   await message.markAsReadBy(userId);
+
+  // Send read receipt to message sender (if not the same user)
+  if (message.sender.toString() !== userId.toString()) {
+    const reader = await User.findById(userId);
+
+    await notificationService.createNotification(
+      message.sender,
+      'message.read',
+      'Message read',
+      `${reader.fName} read your message in ${messageGroup.name}`,
+      {
+        messageId: message._id,
+        groupId: messageGroup._id,
+        groupName: messageGroup.name,
+        readerId: userId,
+        readerName: `${reader.fName} ${reader.lName}`,
+      }
+    );
+  }
+
   return message;
 };
