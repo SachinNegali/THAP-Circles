@@ -3,6 +3,8 @@ import Group from '../models/group.model.js';
 import User from '../models/user.model.js';
 import Message from '../models/message.model.js';
 import * as notificationService from './notification.service.js';
+import * as senderKeyService from './senderKey.service.js';
+import sseManager from './sse.service.js';
 
 /**
  * Create a new group
@@ -250,6 +252,19 @@ export const addMembers = async (groupId, userId, memberIds) => {
     }
   );
 
+  // E2EE: Emit group:member_added event so existing members distribute sender keys
+  const existingMemberIds = group.members
+    .filter((m) => !memberIds.map(String).includes(m.user.toString()))
+    .map((m) => m.user);
+
+  for (const newMemberId of memberIds) {
+    sseManager.sendToUsers(existingMemberIds, 'group:member_added', {
+      chatId: group._id.toString(),
+      userId: newMemberId.toString(),
+      addedBy: userId.toString(),
+    });
+  }
+
   return group.populate('members.user', 'fName lName email');
 };
 
@@ -335,6 +350,17 @@ export const removeMember = async (groupId, userId, targetUserId) => {
       );
     }
   }
+
+  // E2EE: Delete all sender keys for the removed member
+  await senderKeyService.deleteSenderKeysForUser(groupId, targetUserId);
+
+  // E2EE: Emit group:member_removed so remaining members rotate their sender keys
+  const remainingIds = group.members.map((m) => m.user);
+  sseManager.sendToUsers(remainingIds, 'group:member_removed', {
+    chatId: group._id.toString(),
+    userId: targetUserId.toString(),
+    removedBy: userId.toString(),
+  });
 
   return group.populate('members.user', 'fName lName email');
 };

@@ -1,0 +1,702 @@
+# End-to-End Encryption — Backend Requirements Document
+
+> **Audience**: Backend development team  
+> **Purpose**: All API endpoints, data models, and server-side logic required to support client-side E2EE  
+> **Key principle**: The server is a **zero-knowledge relay** — it stores and forwards encrypted data but **never** has access to plaintext content or private keys
+
+---
+
+## 1. Architecture Overview
+
+```mermaid
+graph TB
+    subgraph "Client A"
+        CA_KM["KeyManager"] --> CA_CS["CryptoService"]
+        CA_CS --> CA_API["API Layer"]
+    end
+
+    subgraph "Server (Zero-Knowledge)"
+        API["REST API"]
+        WS["WebSocket Server"]
+        DB["MongoDB"]
+        CDN["Media Storage / CDN"]
+        API --> DB
+        WS --> DB
+        API --> CDN
+    end
+
+    subgraph "Client B"
+        CB_API["API Layer"] --> CB_CS["CryptoService"]
+        CB_CS --> CB_KM["KeyManager"]
+    end
+
+    CA_API -->|"Encrypted payloads only"| API
+    CA_API -->|"Real-time relay"| WS
+    API -->|"Encrypted payloads"| CB_API
+    WS -->|"Encrypted payloads"| CB_API
+```
+
+> [!CAUTION]
+> The server must **never** attempt to decrypt, inspect, or log the contents of encrypted fields (`ciphertext`, `encryptedKey`, `encryptedSenderKey`). These are opaque base64 blobs.
+
+---
+
+## 2. Data Models (MongoDB)
+
+### 2.1 KeyBundle
+
+Stores the **public** cryptographic keys for each user/device. Private keys never leave the client.
+
+```javascript
+// Collection: key_bundles
+{
+  _id: ObjectId,
+  userId: ObjectId,          // ref: users
+  deviceId: String,          // unique device identifier (UUID)
+  
+  // Public keys (all base64-encoded)
+  identityKey: String,       // Long-term X25519 public key
+  
+  signedPreKey: {
+    id: Number,              // sequential ID
+    key: String,             // X25519 public key (base64)
+    signature: String,       // Ed25519 signature over the key (base64)
+    createdAt: Date
+  },
+  
+  oneTimePreKeys: [{
+    id: Number,              // sequential ID  
+    key: String              // X25519 public key (base64)
+  }],
+  
+  createdAt: Date,
+  updatedAt: Date
+}
+
+// Indexes
+{ userId: 1, deviceId: 1 }   // unique compound index
+{ userId: 1 }                // for fetching all devices of a user
+```
+
+### 2.2 EncryptedMessage
+
+Replaces or extends the existing [Message](file:///Users/sachinn/Desktop/Finally/innnond/THAF-Swimming/types/chatTypes.ts#17-37) model. The server stores **only ciphertext**.
+
+```javascript
+// Collection: encrypted_messages
+{
+  _id: ObjectId,
+  chatId: ObjectId,          // ref: chats
+  senderId: ObjectId,        // ref: users  
+  senderDeviceId: String,    // device that sent the message
+  
+  // Message type hint (server needs this for routing/notification text)
+  type: String,              // 'text' | 'image' | 'file' | 'video' | 'audio'
+  
+  // Encrypted payload — OPAQUE to the server
+  ciphertext: String,        // base64-encoded encrypted content
+  
+  // Key exchange metadata (for initial X3DH messages)
+  ephemeralKey: String,      // base64 sender's ephemeral public key (optional)
+  oneTimePreKeyId: Number,   // which OPK was consumed (optional, initial msg only)
+  
+  // Ratchet state (used by receiver for decryption ordering)
+  messageNumber: Number,     // position in current sending chain
+  previousChainLength: Number, // length of previous sending chain
+  
+  // Server-managed metadata (NOT encrypted)
+  isDeleted: Boolean,        // soft delete flag
+  readBy: [{
+    userId: ObjectId,
+    readAt: Date
+  }],
+  
+  // For media messages: encrypted attachment reference
+  attachments: [{
+    encryptedUrl: String,      // URL of encrypted blob on CDN
+    mimeType: String,          // 'image/jpeg', 'video/mp4', etc. (can be plaintext for routing)
+    sizeBytes: Number,         // file size (plaintext for quota management)
+    thumbnailUrl: String       // URL of encrypted thumbnail (optional)
+    // NOTE: AES key, IV, and hash are INSIDE the ciphertext field
+  }],
+
+  createdAt: Date,
+  updatedAt: Date
+}
+
+// Indexes
+{ chatId: 1, createdAt: -1 }       // list messages in a chat
+{ senderId: 1, createdAt: -1 }     // messages by sender
+{ chatId: 1, 'readBy.userId': 1 }  // unread queries
+```
+
+### 2.3 GroupSenderKey
+
+Stores encrypted sender keys distributed to group members (E2EE protected via pairwise sessions).
+
+```javascript
+// Collection: group_sender_keys
+{
+  _id: ObjectId,
+  groupId: ObjectId,         // ref: chats (group type)
+  senderId: ObjectId,        // the user whose sender key this is
+  senderDeviceId: String,
+  recipientId: ObjectId,     // the user this key is encrypted for
+  recipientDeviceId: String,
+  
+  // The sender key, encrypted for the recipient using their pairwise E2EE session
+  encryptedSenderKey: String, // base64 — OPAQUE to server
+  
+  // Versioning for key rotation
+  version: Number,           // increments on rotation
+  
+  createdAt: Date,
+  updatedAt: Date
+}
+
+// Indexes
+{ groupId: 1, recipientId: 1, recipientDeviceId: 1 }  // fetch keys for a user in a group
+{ groupId: 1, senderId: 1, version: -1 }               // latest key version
+{ groupId: 1, senderId: 1, recipientId: 1 }             // unique compound
+```
+
+### 2.4 DeviceRegistration
+
+Tracks user devices for multi-device key distribution.
+
+```javascript
+// Collection: devices
+{
+  _id: ObjectId,
+  userId: ObjectId,
+  deviceId: String,          // UUID, generated on first app install
+  deviceName: String,        // e.g., "iPhone 15 Pro", "Pixel 8"
+  platform: String,          // 'ios' | 'android'
+  pushToken: String,         // for push notifications
+  lastActiveAt: Date,
+  registeredAt: Date
+}
+
+// Indexes
+{ userId: 1, deviceId: 1 }  // unique compound
+{ userId: 1, lastActiveAt: -1 }
+```
+
+---
+
+## 3. API Endpoints
+
+All endpoints require JWT authentication (existing `Authorization: Bearer <token>` middleware).
+
+### 3.1 Device Registration
+
+#### `POST /api/devices/register`
+
+Called on first app launch to register a device.
+
+**Request:**
+```json
+{
+  "deviceId": "550e8400-e29b-41d4-a716-446655440000",
+  "deviceName": "iPhone 15 Pro",
+  "platform": "ios",
+  "pushToken": "ExponentPushToken[xxxxxx]"
+}
+```
+
+**Response (201):**
+```json
+{
+  "success": true,
+  "data": {
+    "deviceId": "550e8400-e29b-41d4-a716-446655440000",
+    "registeredAt": "2026-02-17T14:00:00Z"
+  }
+}
+```
+
+---
+
+### 3.2 Key Bundle Management
+
+#### `POST /api/keys/bundle`
+
+Upload the user's public key bundle. Called after key generation (first install) and on key rotation.
+
+**Request:**
+```json
+{
+  "deviceId": "550e8400-e29b-41d4-a716-446655440000",
+  "identityKey": "base64...",
+  "signedPreKey": {
+    "id": 1,
+    "key": "base64...",
+    "signature": "base64..."
+  },
+  "oneTimePreKeys": [
+    { "id": 1, "key": "base64..." },
+    { "id": 2, "key": "base64..." }
+  ]
+}
+```
+
+**Response (201):**
+```json
+{
+  "success": true,
+  "message": "Key bundle uploaded successfully"
+}
+```
+
+**Server logic:**
+1. Validate JWT → extract `userId`
+2. Upsert the key bundle for [(userId, deviceId)](file:///Users/sachinn/Desktop/Finally/innnond/THAF-Swimming/lib/api/endpoints.ts#45-46)
+3. **Do NOT validate** the cryptographic content — treat as opaque blobs
+4. Store `signedPreKey.signature` as-is (client handles verification)
+
+---
+
+#### `GET /api/keys/bundle/:userId`
+
+Fetch a user's key bundle to establish an E2EE session. Returns one bundle per device.
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "userId": "67aabb...",
+    "devices": [
+      {
+        "deviceId": "550e8400...",
+        "identityKey": "base64...",
+        "signedPreKey": {
+          "id": 1,
+          "key": "base64...",
+          "signature": "base64..."
+        },
+        "oneTimePreKey": {
+          "id": 42,
+          "key": "base64..."
+        }
+      }
+    ]
+  }
+}
+```
+
+**Server logic:**
+1. Find all key bundles for the target `userId`
+2. For each device, return the identity key, signed pre-key, and **one** one-time pre-key
+3. **Remove the consumed one-time pre-key** from the bundle (it's single-use)
+4. If no one-time pre-keys remain, omit the `oneTimePreKey` field (client handles fallback)
+
+> [!IMPORTANT]
+> One-time pre-keys are **consumed on fetch**. The server must atomically remove the returned key from the array to prevent reuse. Use `$pop` or `findOneAndUpdate` with `$pull`.
+
+---
+
+#### `POST /api/keys/prekeys`
+
+Replenish one-time pre-keys when the client detects the count is low.
+
+**Request:**
+```json
+{
+  "deviceId": "550e8400...",
+  "oneTimePreKeys": [
+    { "id": 101, "key": "base64..." },
+    { "id": 102, "key": "base64..." }
+  ]
+}
+```
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "totalPreKeys": 87
+  }
+}
+```
+
+**Server logic:**
+1. Append new pre-keys to the existing `oneTimePreKeys` array
+2. Return the updated total count
+
+---
+
+#### `GET /api/keys/prekeys/count`
+
+Check how many one-time pre-keys remain on the server.
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "deviceId": "550e8400...",
+    "count": 23
+  }
+}
+```
+
+---
+
+### 3.3 Encrypted Messages
+
+#### `POST /api/chats/:chatId/messages/encrypted`
+
+Send an encrypted message. The server **relays** without inspecting content.
+
+**Request:**
+```json
+{
+  "senderDeviceId": "550e8400...",
+  "type": "text",
+  "ciphertext": "base64_encrypted_content...",
+  "ephemeralKey": "base64_public_key...",
+  "oneTimePreKeyId": 42,
+  "messageNumber": 0,
+  "previousChainLength": 0,
+  "attachments": []
+}
+```
+
+**Response (201):**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "msg_abc123",
+    "chatId": "chat_xyz",
+    "senderId": "user_sender",
+    "createdAt": "2026-02-17T14:30:00Z"
+  }
+}
+```
+
+**Server logic:**
+1. Validate sender is a participant of `chatId`
+2. Store the message with all encrypted fields as-is
+3. **Push notification**: Use `type` field to generate generic notification text:
+   - `text` → "New message from {senderName}"
+   - `image` → "{senderName} sent a photo"
+   - `video` → "{senderName} sent a video"
+   - `file` → "{senderName} sent a file"
+4. **WebSocket**: Broadcast the encrypted message to all online participants
+5. Update the chat's `lastMessage` reference and `updatedAt`
+
+> [!WARNING]
+> Push notification text must **never** include any decrypted content. Only use generic templates based on the `type` field and sender name.
+
+---
+
+#### `GET /api/chats/:chatId/messages/encrypted`
+
+Fetch encrypted messages for a chat, paginated.
+
+**Query params:** `?page=1&limit=50&before=<ISO_date>&after=<ISO_date>`
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "msg_abc123",
+      "chatId": "chat_xyz",
+      "senderId": "user_sender",
+      "senderDeviceId": "550e8400...",
+      "type": "text",
+      "ciphertext": "base64...",
+      "ephemeralKey": "base64...",
+      "messageNumber": 5,
+      "previousChainLength": 3,
+      "attachments": [],
+      "readBy": [],
+      "isDeleted": false,
+      "createdAt": "2026-02-17T14:30:00Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 50,
+    "total": 142,
+    "totalPages": 3,
+    "hasNext": true,
+    "hasPrev": false
+  }
+}
+```
+
+---
+
+#### `POST /api/chats/:chatId/messages/:messageId/read`
+
+Mark a message as read (same as existing — no E2EE impact).
+
+---
+
+#### `DELETE /api/chats/:chatId/messages/:messageId`
+
+Soft-delete a message (sets `isDeleted: true`). Optionally clear ciphertext.
+
+**Server logic:**
+1. Set `isDeleted: true`
+2. Optionally set `ciphertext: ""` to free storage
+3. Broadcast delete event via WebSocket
+
+---
+
+### 3.4 Media Upload
+
+#### `POST /api/media/upload`
+
+Upload an **encrypted** media blob. The server stores it without inspection.
+
+**Request:** `multipart/form-data`
+- `file`: Binary encrypted blob
+- `chatId`: String — for access control
+- `mimeType`: String — e.g., `image/jpeg` (used for Content-Type on download)
+- `sizeBytes`: Number
+
+**Response (201):**
+```json
+{
+  "success": true,
+  "data": {
+    "url": "https://cdn.thaf.app/media/enc_abc123.bin",
+    "sizeBytes": 2450000
+  }
+}
+```
+
+**Server logic:**
+1. Validate sender is a participant of `chatId`
+2. Store the file as an opaque binary blob (S3, GCS, or local storage)
+3. Return a permanent URL
+4. **Do NOT** attempt to generate thumbnails, compress, or transcode — the file is encrypted
+
+> [!IMPORTANT]
+> Unlike typical media uploads, the server must **not** process the file in any way. No thumbnail generation, no virus scanning of file contents, no image resizing. The file is encrypted and meaningless to the server.
+
+---
+
+#### `GET /api/media/:mediaId`
+
+Download an encrypted media blob. Standard file download with access control.
+
+**Server logic:**
+1. Verify the requesting user is a participant in the associated chat
+2. Return the raw encrypted binary with `Content-Type: application/octet-stream`
+3. Support `Range` header for partial downloads (important for streaming video decryption)
+
+---
+
+### 3.5 Group Sender Key Distribution
+
+#### `POST /api/groups/:groupId/sender-keys`
+
+Distribute a sender key to group members. Called when:
+- User joins/creates a group
+- Sender key is rotated (member removed)
+
+**Request:**
+```json
+{
+  "senderDeviceId": "550e8400...",
+  "distributions": [
+    {
+      "recipientId": "user_bob",
+      "recipientDeviceId": "device_bob_1",
+      "encryptedSenderKey": "base64...",
+      "version": 1
+    },
+    {
+      "recipientId": "user_carol",
+      "recipientDeviceId": "device_carol_1",
+      "encryptedSenderKey": "base64...",
+      "version": 1
+    }
+  ]
+}
+```
+
+**Response (201):**
+```json
+{
+  "success": true,
+  "message": "Sender keys distributed to 2 recipients"
+}
+```
+
+---
+
+#### `GET /api/groups/:groupId/sender-keys`
+
+Fetch all sender keys distributed to the current user for a group.
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "senderId": "user_alice",
+      "senderDeviceId": "device_alice_1",
+      "encryptedSenderKey": "base64...",
+      "version": 2
+    },
+    {
+      "senderId": "user_bob",
+      "senderDeviceId": "device_bob_1",
+      "encryptedSenderKey": "base64...",
+      "version": 1
+    }
+  ]
+}
+```
+
+---
+
+### 3.6 Group Membership Events
+
+When group membership changes, the server must notify clients so they can handle key rotation:
+
+#### `POST /api/chats/:chatId/members` (existing — add member)
+
+**Additional server logic:**
+1. After adding the member, emit a WebSocket event:
+```json
+{
+  "event": "group:member_added",
+  "data": {
+    "chatId": "chat_xyz",
+    "userId": "new_member_id",
+    "addedBy": "admin_id"
+  }
+}
+```
+2. Existing members receive this and distribute their sender keys to the new member
+
+#### `DELETE /api/chats/:chatId/members/:userId` (existing — remove member)
+
+**Additional server logic:**
+1. After removing the member, emit a WebSocket event:
+```json
+{
+  "event": "group:member_removed",
+  "data": {
+    "chatId": "chat_xyz",
+    "userId": "removed_member_id",
+    "removedBy": "admin_id"
+  }
+}
+```
+2. **Delete all sender keys** where `recipientId` = removed member
+3. Remaining members receive this event and rotate their sender keys
+
+---
+
+## 4. WebSocket Events for E2EE
+
+Extend the existing WebSocket server with these events:
+
+| Event | Direction | Purpose |
+|---|---|---|
+| `message:encrypted` | Server → Client | Deliver a new encrypted message |
+| `message:deleted` | Server → Client | Notify message deletion |
+| `keys:prekey_low` | Server → Client | Warn client that pre-key count is below threshold |
+| `group:member_added` | Server → Client | Trigger sender key distribution to new member |
+| `group:member_removed` | Server → Client | Trigger sender key rotation |
+| `group:sender_key_update` | Server → Client | Notify that a new sender key is available |
+| `device:identity_key_changed` | Server → Client | Warn contacts of a key change (re-registration) |
+
+### WebSocket Message Format
+
+```json
+{
+  "event": "message:encrypted",
+  "data": {
+    "id": "msg_abc123",
+    "chatId": "chat_xyz",
+    "senderId": "user_sender",
+    "senderDeviceId": "device_1",
+    "type": "text",
+    "ciphertext": "base64...",
+    "ephemeralKey": "base64...",
+    "messageNumber": 5,
+    "previousChainLength": 3,
+    "attachments": [],
+    "createdAt": "2026-02-17T14:30:00Z"
+  }
+}
+```
+
+---
+
+## 5. Security Constraints for Backend
+
+| # | Constraint |
+|---|---|
+| 1 | **Never log** the contents of `ciphertext`, `encryptedSenderKey`, `ephemeralKey`, or any key material |
+| 2 | **Never inspect** or validate the contents of encrypted fields beyond checking they are valid base64 strings |
+| 3 | **Atomically consume** one-time pre-keys — use MongoDB `findOneAndUpdate` with `$pop` / `$pull` |
+| 4 | **Delete sender keys** for removed group members immediately |
+| 5 | **Rate-limit** key bundle fetches to prevent enumeration attacks (max 60 req/min per user) |
+| 6 | **Access control**: Only chat participants can fetch messages, upload media, or access media URLs for that chat |
+| 7 | **Push notifications** must use generic templates only — never include ciphertext in push payloads |
+| 8 | **Key change detection**: When a user uploads a new identity key, flag all existing sessions as potentially changed and notify contacts via WebSocket |
+| 9 | **Pre-key monitoring**: When a user's one-time pre-key count drops below 25, send a `keys:prekey_low` WebSocket event |
+| 10 | **Media storage**: Encrypted blobs must support `Range` requests for streaming decryption on the client |
+
+---
+
+## 6. Error Codes
+
+| Code | HTTP Status | Description |
+|---|---|---|
+| `E2E_001` | 404 | Key bundle not found for user |
+| `E2E_002` | 410 | No one-time pre-keys available (session can still be established without OPK) |
+| `E2E_003` | 400 | Invalid key bundle format |
+| `E2E_004` | 403 | Not a participant in this chat |
+| `E2E_005` | 413 | Media file exceeds maximum size (100 MB) |
+| `E2E_006` | 429 | Key bundle fetch rate limit exceeded |
+| `E2E_007` | 404 | Sender key not found for group member |
+| `E2E_008` | 400 | Device not registered |
+
+---
+
+## 7. Implementation Phases (Backend)
+
+### Phase 1: Key Infrastructure
+1. Create `Device` model and `POST /api/devices/register`
+2. Create `KeyBundle` model and CRUD endpoints
+3. Implement atomic one-time pre-key consumption
+4. Add pre-key count monitoring
+
+### Phase 2: Encrypted Message Relay
+1. Create `EncryptedMessage` model
+2. Implement `POST /api/chats/:chatId/messages/encrypted`
+3. Implement `GET /api/chats/:chatId/messages/encrypted`
+4. Update WebSocket to broadcast `message:encrypted` events
+5. Update push notification logic to use generic templates
+
+### Phase 3: Media Upload
+1. Implement `POST /api/media/upload` (store encrypted blobs)
+2. Implement `GET /api/media/:mediaId` with access control
+3. Add `Range` header support for streaming downloads
+
+### Phase 4: Group Sender Keys
+1. Create `GroupSenderKey` model
+2. Implement sender key distribution endpoints
+3. Add WebSocket events for membership changes
+4. Delete sender keys on member removal
+
+### Phase 5: Security Hardening
+1. Audit all logging to ensure no key material is logged
+2. Rate-limit key bundle fetches
+3. Key change detection and notification
+4. Add E2E-specific error codes

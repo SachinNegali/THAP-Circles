@@ -15,6 +15,8 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.991.0",
+    "@aws-sdk/s3-request-presigner": "^3.991.0",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
@@ -23,6 +25,7 @@
     "jsonwebtoken": "^9.0.3",
     "moment": "^2.30.1",
     "mongoose": "^9.1.2",
+    "multer": "^2.0.2",
     "nodemon": "^3.1.11",
     "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.48.0",
     "ws": "^8.19.0"

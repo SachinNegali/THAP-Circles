@@ -7,6 +7,13 @@ import eventRoute from './event.route.js';
 import sseRoute from './sse.route.js';
 import notificationRoute from './notification.route.js';
 
+// E2EE routes
+import deviceRoute from './device.route.js';
+import keyRoute from './key.route.js';
+import encryptedMessageRoute from './encryptedMessage.route.js';
+import mediaRoute from './media.route.js';
+import senderKeyRoute from './senderKey.route.js';
+
 const router = express.Router();
 
 router.get('/status', (req, res) => {
@@ -20,5 +27,12 @@ router.use('/trip', tripRoute);
 router.use('/event', eventRoute);
 router.use('/sse', sseRoute);
 router.use('/notification', notificationRoute);
+
+// E2EE endpoints
+router.use('/devices', deviceRoute);
+router.use('/keys', keyRoute);
+router.use('/chats', encryptedMessageRoute);
+router.use('/media', mediaRoute);
+router.use('/groups', senderKeyRoute);
 
 export default router;
