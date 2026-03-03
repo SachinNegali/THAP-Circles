@@ -54,7 +54,11 @@ export const createTrip = async (tripData, creatorId) => {
     endDate: end,
   });
 
-  return trip.populate('participants.user', 'fName lName email').populate('createdBy', 'fName lName email');
+  const populatedTrip = await Trip.findById(trip._id)
+    .populate('participants.user', 'fName lName email')
+    .populate('createdBy', 'fName lName email');
+    console.log("populatedTrip", populatedTrip)
+  return populatedTrip;
 };
 
 /**
@@ -153,7 +157,8 @@ export const updateTrip = async (tripId, userId, updates) => {
 
   await trip.save();
 
-  return trip.populate('participants.user', 'fName lName email').populate('createdBy', 'fName lName email');
+  await trip.populate([{ path: 'participants.user', select: 'fName lName email' }, { path: 'createdBy', select: 'fName lName email' }]);
+  return trip;
 };
 
 /**
@@ -192,7 +197,8 @@ export const addParticipants = async (tripId, userId, participantIds) => {
     }
   }
 
-  return trip.populate('participants.user', 'fName lName email').populate('createdBy', 'fName lName email');
+  await trip.populate([{ path: 'participants.user', select: 'fName lName email' }, { path: 'createdBy', select: 'fName lName email' }]);
+  return trip;
 };
 
 /**
@@ -222,7 +228,8 @@ export const removeParticipant = async (tripId, userId, targetUserId) => {
 
   await trip.removeParticipant(targetUserId);
 
-  return trip.populate('participants.user', 'fName lName email').populate('createdBy', 'fName lName email');
+  await trip.populate([{ path: 'participants.user', select: 'fName lName email' }, { path: 'createdBy', select: 'fName lName email' }]);
+  return trip;
 };
 
 /**

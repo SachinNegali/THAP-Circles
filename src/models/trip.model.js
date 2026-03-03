@@ -66,11 +66,9 @@ tripSchema.index({ startDate: 1, isActive: 1 });
 tripSchema.index({ isActive: 1, startDate: -1 });
 
 // Validation: endDate must be after startDate
-tripSchema.pre('save', function (next) {
+tripSchema.pre('save', function () {
   if (this.endDate <= this.startDate) {
-    next(new Error('End date must be after start date'));
-  } else {
-    next();
+    throw new Error('End date must be after start date');
   }
 });
 

@@ -9,7 +9,9 @@ export const createTrip = async (req, res) => {
   try {
     const { title, description, startLocation, destination, stops, startDate, endDate, participantIds } = req.body;
     const creatorId = req.user._id;
-
+    console.log(req.body,
+      "-------------------------->>>>",startLocation,
+      "----=-==-=-=-=-=-=-==>...", destination);
     if (!title) {
       return sendBadRequest(res, 'Trip title is required');
     }

@@ -21,6 +21,7 @@ const notificationSchema = new mongoose.Schema(
         'group.role_updated',
         'group.updated',
         'group.deleted',
+        'group.member_added',
       ],
       required: true,
     },
