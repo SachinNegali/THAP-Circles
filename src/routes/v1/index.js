@@ -14,6 +14,7 @@ import notificationRoute from './notification.route.js';
 
 const router = express.Router();
 
+console.log("call here")
 router.get('/status', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date() });
 });
