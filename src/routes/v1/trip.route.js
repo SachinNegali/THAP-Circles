@@ -8,6 +8,7 @@ const router = express.Router();
 router.use(auth);
 
 // Trip management routes
+router.get('/filter', tripController.searchTrips);
 router.post('/', tripController.createTrip);
 router.get('/', tripController.getUserTrips);
 router.get('/:id', tripController.getTrip);

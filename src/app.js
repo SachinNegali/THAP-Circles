@@ -81,7 +81,7 @@ function sanitizeObject(obj) {
 app.use((req, _res, next) => {
   if (req.body) req.body = sanitizeObject(req.body);
   // req.params is set per-route, but sanitize if present
-  console.log("BODY", req?.body, "PARAMS", req?.params, "QUERY", req?.query, "HEADERS", req?.headers)
+  // console.log("BODY", req?.body, "PARAMS", req?.params, "QUERY", req?.query, "HEADERS", req?.headers)
   if (req.params && typeof req.params === 'object') {
     const sanitized = sanitizeObject(req.params);
     for (const key of Object.keys(sanitized)) {

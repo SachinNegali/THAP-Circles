@@ -18,6 +18,7 @@ import keyRoute from './key.route.js';
 import encryptedMessageRoute from './encryptedMessage.route.js';
 import mediaRoute from './media.route.js';
 import senderKeyRoute from './senderKey.route.js';
+import userRoute from '../../../dist/routes/v1/user.route.js';
 
 const router = express.Router();
 
@@ -40,5 +41,6 @@ router.use('/keys', keyRoute);
 router.use('/chats', encryptedMessageRoute);
 router.use('/media', mediaRoute);
 router.use('/groups', senderKeyRoute);
+router.use('/user', userRoute);
 
 export default router;
