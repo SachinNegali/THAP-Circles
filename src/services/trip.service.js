@@ -254,3 +254,76 @@ export const deleteTrip = async (tripId, userId) => {
 
   return trip;
 };
+
+/**
+ * Search trips with filters
+ * @param {Object} filters - Filter criteria (from, to, startDate, endDate)
+ * @param {number} page
+ * @param {number} limit
+ * @returns {Promise<Object>}
+ */
+export const searchTrips = async (filters, page = 1, limit = 20) => {
+  const skip = (page - 1) * limit;
+  const query = { isActive: true };
+
+  // Always enforce upcoming trips by default
+  query.startDate = { $gte: new Date() };
+
+  if (filters.from) {
+    query.$or = [
+      { 'startLocation.city': { $regex: filters.from, $options: 'i' } },
+      { 'startLocation.name': { $regex: filters.from, $options: 'i' } },
+    ];
+  }
+
+  if (filters.to) {
+    const toCondition = {
+      $or: [
+        { 'destination.city': { $regex: filters.to, $options: 'i' } },
+        { 'destination.name': { $regex: filters.to, $options: 'i' } },
+      ]
+    };
+    
+    if (query.$or) {
+      query.$and = [{ $or: query.$or }, toCondition];
+      delete query.$or;
+    } else {
+      query.$or = toCondition.$or;
+    }
+  }
+
+  if (filters.startDate || filters.endDate) {
+    const dateQuery = {};
+    if (filters.startDate) {
+      const start = new Date(filters.startDate);
+      const now = new Date();
+      dateQuery.$gte = start > now ? start : now;
+    } else {
+      dateQuery.$gte = new Date();
+    }
+    
+    if (filters.endDate) {
+      dateQuery.$lte = new Date(filters.endDate);
+    }
+    query.startDate = dateQuery;
+  }
+
+  const trips = await Trip.find(query)
+    .sort({ startDate: 1 })
+    .skip(skip)
+    .limit(limit)
+    .populate('participants.user', 'fName lName email')
+    .populate('createdBy', 'fName lName email');
+
+  const total = await Trip.countDocuments(query);
+
+  return {
+    trips,
+    pagination: {
+      page,
+      limit,
+      total,
+      pages: Math.ceil(total / limit),
+    },
+  };
+};

@@ -28,6 +28,7 @@ export interface IUser extends Document {
   tokenVersion: number;
   createdAt: Date;
   updatedAt: Date;
+  lastLogin: Date;
 }
 
 interface IUserModel extends Model<IUser> {
@@ -87,6 +88,10 @@ const userSchema = new Schema<IUser>(
     tokenVersion: {
       type: Number,
       default: 0,
+    },
+    lastLogin: {
+      type: Date,
+      default: Date.now,
     },
   },
   {

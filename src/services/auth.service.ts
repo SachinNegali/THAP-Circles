@@ -51,6 +51,7 @@ export const authenticateWithGoogle = async (idToken: string): Promise<AuthResul
     user.lName = lName;
     user.picture = googlePayload.picture;
     user.email = googlePayload.email;
+    user.lastLogin = new Date();
     await user.save();
   } else {
     // Step 2: Migration — existing user by email without googleId
@@ -73,6 +74,7 @@ export const authenticateWithGoogle = async (idToken: string): Promise<AuthResul
       }
       if (user.tokenVersion === undefined) user.tokenVersion = 0;
       if (user.refreshTokenHash === undefined) user.refreshTokenHash = null;
+      user.lastLogin = new Date();
       await user.save();
     } else {
       // Step 3: Brand new user
@@ -86,6 +88,7 @@ export const authenticateWithGoogle = async (idToken: string): Promise<AuthResul
         role: 'user',
         tokenVersion: 0,
         refreshTokenHash: null,
+        lastLogin: new Date(),
       });
     }
   }
@@ -134,6 +137,7 @@ export const refreshAuthTokens = async (refreshToken: string): Promise<AuthToken
   const tokens = generateTokenPair(user._id.toString(), user.tokenVersion);
 
   user.refreshTokenHash = hashToken(tokens.refresh.token);
+  user.lastLogin = new Date();
   await user.save();
 
   return tokens;

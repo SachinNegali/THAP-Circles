@@ -158,3 +158,21 @@ export const deleteTrip = async (req, res) => {
     return handleError(res, error, 'Failed to delete trip');
   }
 };
+
+/**
+ * Filter/Search trips
+ * GET /trips/filter
+ */
+export const searchTrips = async (req, res) => {
+  try {
+    const { from, to, startDate, endDate } = req.query;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+
+    const result = await tripService.searchTrips({ from, to, startDate, endDate }, page, limit);
+
+    res.send(result);
+  } catch (error) {
+    return handleError(res, error, 'Failed to filter trips');
+  }
+};
