@@ -72,5 +72,6 @@ userSchema.methods.generateRefreshToken = function () {
   return token;
 };
 
-const User = mongoose.model('User', userSchema);
+// Reuse existing model if already registered (avoids conflict with TS version)
+const User = mongoose.models.User || mongoose.model('User', userSchema);
 export default User;

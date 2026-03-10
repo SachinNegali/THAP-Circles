@@ -1,5 +1,10 @@
 import express from 'express';
-import authRoute from './auth.routes.js';
+/**
+ * Import the NEW TypeScript-compiled auth routes.
+ * These replace the old auth.routes.js with production-grade
+ * Google authentication, refresh token rotation, and logout.
+ */
+import authRoute from '../../../dist/routes/v1/auth.routes.js';
 import groupRoute from './group.route.js';
 import messageRoute from './message.route.js';
 import tripRoute from './trip.route.js';
@@ -16,11 +21,12 @@ import senderKeyRoute from './senderKey.route.js';
 
 const router = express.Router();
 
+console.log("call here")
 router.get('/status', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date() });
 });
 
-router.use('/auth', authRoute);
+router.use('/auth', authRoute.default || authRoute);
 router.use('/group', groupRoute);
 router.use('/message', messageRoute);
 router.use('/trip', tripRoute);

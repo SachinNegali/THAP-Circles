@@ -16,6 +16,8 @@ export default {
   },
   jwt: {
     secret: process.env.JWT_SECRET || 'secret-key-change-me',
+    accessSecret: process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET || 'secret-key-change-me',
+    refreshSecret: process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET || 'secret-key-change-me',
     accessExpirationMinutes: process.env.JWT_ACCESS_EXPIRATION_MINUTES || 30,
     refreshExpirationDays: process.env.JWT_REFRESH_EXPIRATION_DAYS || 30,
   },
