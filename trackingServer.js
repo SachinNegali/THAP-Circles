@@ -9,7 +9,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 dotenv.config({ path: join(__dirname, '.env') });
 
-const JWT_SECRET = process.env.JWT_SECRET || 'secret-key-change-me';
+const JWT_SECRET = process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET || 'secret-key-change-me';
 const PORT = parseInt(process.env.TRACKING_SERVER_PORT || '9001', 10);
 
 // In-memory routing: Map<groupId, Set<WebSocket>>
