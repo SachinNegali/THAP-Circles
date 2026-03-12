@@ -48,7 +48,9 @@ function parseQuery(url) {
  */
 function verifyToken(token) {
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
+    // Handle 'Bearer ' prefix if present
+    const cleanToken = token.startsWith('Bearer ') ? token.slice(7) : token;
+    const decoded = jwt.verify(cleanToken, JWT_SECRET);
     
     // Check if it's an access token
     if (decoded.type !== 'access') {
@@ -123,9 +125,9 @@ app.ws('/*', {
   /* WebSocket upgrade handler - handles authentication */
   upgrade: (res, req, context) => {
     const url = req.getUrl();
-    const queryString = req.getQuery(); // This returns the full query string without '?'
+    const queryString = req.getQuery();
     
-    // Parse query string manually
+    // 1. Try to get token and groupId from query string
     const query = {};
     if (queryString) {
       const pairs = queryString.split('&');
@@ -137,11 +139,17 @@ app.ws('/*', {
       }
     }
     
-    const { token, groupId } = query;
+    // 2. Try to get token from Authorization header if not in query
+    let token = query.token || query.Authorization;
+    if (!token) {
+      token = req.getHeader('authorization');
+    }
+    
+    const groupId = query.groupId || query.group;
     
     // Validate token and groupId
     if (!token || !groupId) {
-      console.log('[AUTH] Missing token or groupId');
+      console.log(`[AUTH] Missing credentials: token=${!!token}, groupId=${!!groupId}`);
       res.writeStatus('401 Unauthorized');
       res.end('Missing token or groupId');
       return;
@@ -150,19 +158,20 @@ app.ws('/*', {
     // Verify JWT token
     const decoded = verifyToken(token);
     if (!decoded) {
-      console.log('[AUTH] Invalid token');
+      console.log('[AUTH] Invalid or expired token');
       res.writeStatus('401 Unauthorized');
       res.end('Invalid token');
       return;
     }
     
-    const userId = decoded.sub;
+    // Handle both 'userId' (our API) and 'sub' (JWT standard)
+    const userId = decoded.userId || decoded.sub;
     
     console.log(`[AUTH] User ${userId} authenticated for group ${groupId}`);
     
     // Upgrade to WebSocket
     res.upgrade(
-      { userId, groupId }, // userData to pass to ws handler
+      { userId, groupId },
       req.getHeader('sec-websocket-key'),
       req.getHeader('sec-websocket-protocol'),
       req.getHeader('sec-websocket-extensions'),
