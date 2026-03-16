@@ -33,7 +33,7 @@ export const createTrip = async (tripData, creatorId) => {
   }
 
   // Create trip with creator as first participant
-  const trip = await Trip.create({
+  const tripDoc = new Trip({
     title,
     description,
     startLocation,
@@ -54,7 +54,10 @@ export const createTrip = async (tripData, creatorId) => {
     endDate: end,
   });
 
-  const populatedTrip = await Trip.findById(trip._id)
+  tripDoc.trackingGroupId = `trip_${tripDoc._id.toString().slice(-8)}`;
+  await tripDoc.save();
+
+  const populatedTrip = await Trip.findById(tripDoc._id)
     .populate('participants.user', 'fName lName email')
     .populate('createdBy', 'fName lName email');
     console.log("populatedTrip", populatedTrip)
