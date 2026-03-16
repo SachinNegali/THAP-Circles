@@ -18,6 +18,66 @@ const groups = new Map();
 // User metadata: WeakMap<WebSocket, {userId, groupId}>
 const userMetadata = new WeakMap();
 
+// ─── Long-Polling Infrastructure ───────────────────────────────────────────────
+// Per-group polling state:
+//   messages:    ring-buffer of recent updates  { userId, data (base64), ts }
+//   subscribers: waiting HTTP responses          { res, userId, timer }
+const pollingGroups = new Map();
+
+const POLL_TIMEOUT_MS = 30_000;   // hold a long-poll response for up to 30 s
+const MAX_BUFFERED_MSGS = 50;     // cap per-group message buffer
+
+/**
+ * Get or create the polling state for a group
+ */
+function getPollingGroup(groupId) {
+  if (!pollingGroups.has(groupId)) {
+    pollingGroups.set(groupId, { messages: [], subscribers: [] });
+  }
+  return pollingGroups.get(groupId);
+}
+
+/**
+ * Push a message into the polling buffer and immediately resolve waiting subscribers
+ */
+function pushPollingMessage(groupId, userId, base64Data) {
+  const pg = getPollingGroup(groupId);
+  const entry = { userId, data: base64Data, ts: Date.now() };
+  pg.messages.push(entry);
+
+  // Cap the buffer
+  if (pg.messages.length > MAX_BUFFERED_MSGS) {
+    pg.messages = pg.messages.slice(-MAX_BUFFERED_MSGS);
+  }
+
+  // Flush to all waiting subscribers
+  for (const sub of pg.subscribers) {
+    clearTimeout(sub.timer);
+    try {
+      sub.res.cork(() => {
+        sub.res.writeStatus('200 OK');
+        sub.res.writeHeader('Content-Type', 'application/json');
+        sub.res.end(JSON.stringify({ messages: [entry] }));
+      });
+    } catch (_) { /* response already aborted */ }
+  }
+  pg.subscribers = [];
+}
+
+/**
+ * Read the full body of a uWS HTTP request (required because uWS streams bodies)
+ */
+function readBody(res) {
+  return new Promise((resolve, reject) => {
+    let buffer = Buffer.alloc(0);
+    res.onData((chunk, isLast) => {
+      buffer = Buffer.concat([buffer, Buffer.from(chunk)]);
+      if (isLast) resolve(buffer.toString('utf8'));
+    });
+    res.onAborted(() => reject(new Error('Request aborted')));
+  });
+}
+
 /**
  * Parse query string from URL
  * @param {string} url - Full URL with query string
@@ -114,6 +174,11 @@ function broadcastToGroup(groupId, senderWs, message) {
       broadcastCount++;
     }
   }
+  
+  // ── Interop: also push into the polling buffer so long-poll clients see WS updates ──
+  const senderId = senderWs ? (userMetadata.get(senderWs)?.userId || 'ws-unknown') : 'poll';
+  const base64 = Buffer.from(message).toString('base64');
+  pushPollingMessage(groupId, senderId, base64);
   
   return broadcastCount;
 }
@@ -258,13 +323,241 @@ app.ws('/*', {
   maxBackpressure: 1024 * 1024, // 1MB backpressure limit
 });
 
+// ─── Long-Polling HTTP Endpoints ───────────────────────────────────────────────
+
+/**
+ * POST /poll/send — submit a location update via HTTP
+ * Headers: Authorization: Bearer <JWT>
+ * Body:    { "groupId": "...", "data": "<base64 binary payload>" }
+ */
+app.post('/poll/send', (res, req) => {
+  // uWS requires onAborted before any async work
+  let aborted = false;
+  res.onAborted(() => { aborted = true; });
+
+  const authHeader = req.getHeader('authorization');
+
+  readBody(res)
+    .then((bodyStr) => {
+      if (aborted) return;
+
+      // Authenticate
+      const decoded = verifyToken(authHeader || '');
+      if (!decoded) {
+        res.cork(() => {
+          res.writeStatus('401 Unauthorized');
+          res.end('Invalid token');
+        });
+        return;
+      }
+
+      let body;
+      try { body = JSON.parse(bodyStr); } catch (_) {
+        res.cork(() => {
+          res.writeStatus('400 Bad Request');
+          res.end('Invalid JSON');
+        });
+        return;
+      }
+
+      const { groupId, data } = body;
+      if (!groupId || !data) {
+        res.cork(() => {
+          res.writeStatus('400 Bad Request');
+          res.end('Missing groupId or data');
+        });
+        return;
+      }
+
+      const userId = decoded.userId || decoded.sub;
+      console.log(`[POLL-SEND] User ${userId} → group ${groupId}`);
+
+      // 1. Push to polling buffer (also notifies waiting poll subscribers)
+      pushPollingMessage(groupId, userId, data);
+
+      // 2. Broadcast to WebSocket peers in the same group
+      const group = groups.get(groupId);
+      if (group) {
+        const binaryBuf = Buffer.from(data, 'base64');
+        for (const ws of group) {
+          ws.send(binaryBuf, true, false);
+        }
+      }
+
+      res.cork(() => {
+        res.writeStatus('200 OK');
+        res.writeHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ ok: true }));
+      });
+    })
+    .catch(() => {
+      if (!aborted) {
+        res.cork(() => {
+          res.writeStatus('500 Internal Server Error');
+          res.end('Server error');
+        });
+      }
+    });
+});
+
+/**
+ * GET /poll/updates — long-poll for new location data
+ * Query:   ?token=<JWT>&groupId=<ID>&since=<timestamp>
+ * Holds the response open for up to 30 s, returning immediately when new data arrives.
+ */
+app.get('/poll/updates', (res, req) => {
+  let aborted = false;
+  res.onAborted(() => {
+    aborted = true;
+    // Remove from subscribers if still waiting
+    if (subRef) {
+      const pg = pollingGroups.get(subRef.groupId);
+      if (pg) {
+        pg.subscribers = pg.subscribers.filter(s => s !== subRef);
+      }
+    }
+  });
+
+  let subRef = null;
+
+  const queryString = req.getQuery();
+  const query = {};
+  if (queryString) {
+    for (const pair of queryString.split('&')) {
+      const [k, v] = pair.split('=');
+      if (k && v) query[decodeURIComponent(k)] = decodeURIComponent(v);
+    }
+  }
+
+  const token = query.token || req.getHeader('authorization');
+  const groupId = query.groupId;
+  const since = parseInt(query.since || '0', 10);
+
+  if (!token || !groupId) {
+    res.cork(() => {
+      res.writeStatus('400 Bad Request');
+      res.end('Missing token or groupId');
+    });
+    return;
+  }
+
+  const decoded = verifyToken(token);
+  if (!decoded) {
+    res.cork(() => {
+      res.writeStatus('401 Unauthorized');
+      res.end('Invalid token');
+    });
+    return;
+  }
+
+  const userId = decoded.userId || decoded.sub;
+  const pg = getPollingGroup(groupId);
+
+  // Check if there are already buffered messages newer than `since`
+  const pending = pg.messages.filter(m => m.ts > since);
+  if (pending.length > 0) {
+    res.cork(() => {
+      res.writeStatus('200 OK');
+      res.writeHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ messages: pending }));
+    });
+    return;
+  }
+
+  // No new data — hold the response open
+  const timer = setTimeout(() => {
+    if (aborted) return;
+    // Timeout: return empty array so client re-polls
+    pg.subscribers = pg.subscribers.filter(s => s !== subRef);
+    try {
+      res.cork(() => {
+        res.writeStatus('200 OK');
+        res.writeHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ messages: [] }));
+      });
+    } catch (_) { /* already aborted */ }
+  }, POLL_TIMEOUT_MS);
+
+  subRef = { res, userId, groupId, timer };
+  pg.subscribers.push(subRef);
+
+  console.log(`[POLL-WAIT] User ${userId} waiting on group ${groupId} (${pg.subscribers.length} subscribers)`);
+});
+
+/**
+ * DELETE /poll/leave — client disconnects from polling
+ * Query: ?token=<JWT>&groupId=<ID>
+ */
+app.del('/poll/leave', (res, req) => {
+  const queryString = req.getQuery();
+  const query = {};
+  if (queryString) {
+    for (const pair of queryString.split('&')) {
+      const [k, v] = pair.split('=');
+      if (k && v) query[decodeURIComponent(k)] = decodeURIComponent(v);
+    }
+  }
+
+  const token = query.token || req.getHeader('authorization');
+  const groupId = query.groupId;
+
+  if (!token || !groupId) {
+    res.writeStatus('400 Bad Request');
+    res.end('Missing token or groupId');
+    return;
+  }
+
+  const decoded = verifyToken(token);
+  if (!decoded) {
+    res.writeStatus('401 Unauthorized');
+    res.end('Invalid token');
+    return;
+  }
+
+  const userId = decoded.userId || decoded.sub;
+  const pg = pollingGroups.get(groupId);
+  if (pg) {
+    // Clear any waiting subscriber for this user
+    for (const sub of pg.subscribers) {
+      if (sub.userId === userId) {
+        clearTimeout(sub.timer);
+        try {
+          sub.res.cork(() => {
+            sub.res.writeStatus('200 OK');
+            sub.res.end('Left');
+          });
+        } catch (_) { /* already aborted */ }
+      }
+    }
+    pg.subscribers = pg.subscribers.filter(s => s.userId !== userId);
+
+    // Clean up empty polling groups
+    if (pg.messages.length === 0 && pg.subscribers.length === 0) {
+      pollingGroups.delete(groupId);
+    }
+  }
+
+  console.log(`[POLL-LEAVE] User ${userId} left group ${groupId}`);
+  res.writeStatus('200 OK');
+  res.writeHeader('Content-Type', 'application/json');
+  res.end(JSON.stringify({ ok: true }));
+});
+
 // Health check endpoint
 app.get('/health', (res, req) => {
+  // Count active polling subscribers
+  let pollingClients = 0;
+  for (const [, pg] of pollingGroups) {
+    pollingClients += pg.subscribers.length;
+  }
+
   res.writeStatus('200 OK');
   res.writeHeader('Content-Type', 'application/json');
   res.end(JSON.stringify({
     status: 'ok',
     groups: groups.size,
+    pollingGroups: pollingGroups.size,
+    pollingClients,
     timestamp: Date.now()
   }));
 });
@@ -291,8 +584,22 @@ process.on('SIGINT', () => {
       ws.close();
     }
   }
-  
   groups.clear();
+
+  // Close all polling subscribers
+  for (const [, pg] of pollingGroups) {
+    for (const sub of pg.subscribers) {
+      clearTimeout(sub.timer);
+      try {
+        sub.res.cork(() => {
+          sub.res.writeStatus('503 Service Unavailable');
+          sub.res.end('Server shutting down');
+        });
+      } catch (_) { /* already aborted */ }
+    }
+  }
+  pollingGroups.clear();
+
   console.log('✅ All connections closed');
   process.exit(0);
 });
