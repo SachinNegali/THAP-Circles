@@ -53,6 +53,11 @@ const tripSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    trackingGroupId: {
+      type: String,
+      unique: true,
+      sparse: true,
+    },
   },
   {
     timestamps: true,
