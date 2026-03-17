@@ -83,7 +83,10 @@ tripSchema.pre('save', function () {
  * @returns {boolean}
  */
 tripSchema.methods.isParticipant = function (userId) {
-  return this.participants.some((participant) => participant.user.toString() === userId.toString());
+  return this.participants.some((participant) => {
+    const participantId = participant.user._id || participant.user;
+    return participantId.toString() === userId.toString();
+  });
 };
 
 /**
@@ -92,7 +95,8 @@ tripSchema.methods.isParticipant = function (userId) {
  * @returns {boolean}
  */
 tripSchema.methods.isCreator = function (userId) {
-  return this.createdBy.toString() === userId.toString();
+  const creatorId = this.createdBy._id || this.createdBy;
+  return creatorId.toString() === userId.toString();
 };
 
 /**
