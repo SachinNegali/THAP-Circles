@@ -17,6 +17,7 @@ export interface ISocialAccount {
 }
 
 export interface IUser extends Document {
+  userId?: string;
   fName: string;
   lName: string;
   email: string;
@@ -33,10 +34,18 @@ export interface IUser extends Document {
 
 interface IUserModel extends Model<IUser> {
   isEmailTaken(email: string, excludeUserId?: mongoose.Types.ObjectId): Promise<boolean>;
+  isUserIdTaken(userId: string, excludeUserId?: mongoose.Types.ObjectId): Promise<boolean>;
 }
 
 const userSchema = new Schema<IUser>(
   {
+    userId: {
+      type: String,
+      unique: true,
+      sparse: true, // allows many documents with no userId set
+      trim: true,
+      lowercase: true,
+    },
     fName: {
       type: String,
       required: true,
@@ -104,6 +113,14 @@ userSchema.statics.isEmailTaken = async function (
   excludeUserId?: mongoose.Types.ObjectId
 ): Promise<boolean> {
   const user = await this.findOne({ email, _id: { $ne: excludeUserId } });
+  return !!user;
+};
+
+userSchema.statics.isUserIdTaken = async function (
+  userId: string,
+  excludeUserId?: mongoose.Types.ObjectId
+): Promise<boolean> {
+  const user = await this.findOne({ userId, _id: { $ne: excludeUserId } });
   return !!user;
 };
 

@@ -27,6 +27,7 @@ export const googleAuth = async (req: Request, res: Response): Promise<void> => 
     res.status(200).json({
       user: {
         _id: result.user._id,
+        userId: result.user.userId ?? null,
         fName: result.user.fName,
         lName: result.user.lName,
         email: result.user.email,
