@@ -5,16 +5,18 @@ import Message from '../models/message.model.js';
 import * as notificationService from './notification.service.js';
 import * as senderKeyService from './senderKey.service.js';
 import sseManager from './sse.service.js';
+import { Types } from 'mongoose';
 
 /**
- * Create a new group
+ * Create a new group or DM
  * @param {string} name
  * @param {string} description
  * @param {ObjectId} creatorId
  * @param {Array<ObjectId>} memberIds
+ * @param {string} type - 'group' or 'dm'
  * @returns {Promise<Group>}
  */
-export const createGroup = async (name, description, creatorId, memberIds = []) => {
+export const createGroup = async (name, description, creatorId, memberIds = [], type = 'group') => {
   // Verify creator exists
   const creator = await User.findById(creatorId);
   if (!creator) {
@@ -33,6 +35,7 @@ export const createGroup = async (name, description, creatorId, memberIds = []) 
   const group = await Group.create({
     name,
     description,
+    type,
     createdBy: creatorId,
     members: [
       {
@@ -52,7 +55,7 @@ export const createGroup = async (name, description, creatorId, memberIds = []) 
   await Message.create({
     group: group._id,
     sender: creatorId,
-    content: `${creator.fName} created the group`,
+    content: type === 'dm' ? `${creator.fName} started a chat` : `${creator.fName} created the group`,
     type: 'system',
   });
 
@@ -61,8 +64,8 @@ export const createGroup = async (name, description, creatorId, memberIds = []) 
     await notificationService.createNotifications(
       memberIds,
       'group.invite',
-      'Group Invitation',
-      `${creator.fName} added you to ${group.name}`,
+      type === 'dm' ? 'New Message' : 'Group Invitation',
+      type === 'dm' ? `${creator.fName} started a chat with you` : `${creator.fName} added you to ${group.name}`,
       {
         groupId: group._id,
         groupName: group.name,
@@ -76,22 +79,50 @@ export const createGroup = async (name, description, creatorId, memberIds = []) 
 };
 
 /**
+ * Create or get a DM
+ * @param {ObjectId} creatorId
+ * @param {ObjectId} recipientId
+ * @returns {Promise<Group>}
+ */
+export const createDM = async (creatorId, recipientId) => {
+  // Check if DM already exists
+  const existingDM = await Group.findOne({
+    type: 'dm',
+    members: {
+      $all: [
+        { $elemMatch: { user: creatorId } },
+        { $elemMatch: { user: recipientId } }
+      ]
+    },
+    isActive: true,
+  });
+
+  if (existingDM) {
+    return existingDM.populate('members.user', 'fName lName email');
+  }
+
+  // Create new DM
+  return createGroup(null, null, creatorId, [recipientId], 'dm');
+};
+
+/**
  * Get group by ID
  * @param {ObjectId} groupId
  * @param {ObjectId} userId
  * @returns {Promise<Group>}
  */
 export const getGroupById = async (groupId, userId) => {
+  console.log("illa???", groupId, userId)
   const group = await Group.findOne({ _id: groupId, isActive: true }).populate(
     'members.user',
-    'fName lName email'
+    'fName lName'
   );
-
   if (!group) {
     throw new Error('Group not found');
   }
-
-  if (!group.isMember(userId)) {
+  const isMember = group.isMember(userId)
+  console.log("isMember", isMember)
+  if (!isMember) {
     throw new Error('You are not a member of this group');
   }
 
@@ -105,23 +136,154 @@ export const getGroupById = async (groupId, userId) => {
  * @param {number} limit
  * @returns {Promise<Object>}
  */
+// export const getUserGroups = async (userId, page = 1, limit = 20) => {
+//   const skip = (page - 1) * limit;
+
+//   const groups = await Group.find({
+//     'members.user': userId,
+//     isActive: true,
+//   })
+//     .sort({ lastActivity: -1 })
+//     .skip(skip)
+//     .limit(limit)
+//     .populate('members.user', 'fName lName email')
+//     .populate('createdBy', 'fName lName email');
+
+//   const total = await Group.countDocuments({
+//     'members.user': userId,
+//     isActive: true,
+//   });
+
+//   return {
+//     groups,
+//     pagination: {
+//       page,
+//       limit,
+//       total,
+//       pages: Math.ceil(total / limit),
+//     },
+//   };
+// };
+
+
 export const getUserGroups = async (userId, page = 1, limit = 20) => {
   const skip = (page - 1) * limit;
+  const userObjectId = new Types.ObjectId(userId);
 
-  const groups = await Group.find({
-    'members.user': userId,
-    isActive: true,
-  })
-    .sort({ lastActivity: -1 })
-    .skip(skip)
-    .limit(limit)
-    .populate('members.user', 'fName lName email')
-    .populate('createdBy', 'fName lName email');
+  const [result] = await Group.aggregate([
+    // Match active groups where user is a member
+    { 
+      $match: { 
+        'members.user': userObjectId, 
+        isActive: true 
+      } 
+    },
+    
+    // Use $facet to get both paginated results and total count
+    {
+      $facet: {
+        total: [{ $count: 'count' }],
+        
+        groups: [
+          { $sort: { lastActivity: -1 } },
+          { $skip: skip },
+          { $limit: limit },
+          
+          // Lookup last message with sender populated
+          {
+            $lookup: {
+              from: 'messages',
+              let: { groupId: '$_id' },
+              pipeline: [
+                { 
+                  $match: { 
+                    $expr: { 
+                      $and: [
+                        { $eq: ['$group', '$$groupId'] }, 
+                        { $eq: ['$isDeleted', false] }
+                      ] 
+                    } 
+                  } 
+                },
+                { $sort: { createdAt: -1 } },
+                { $limit: 1 },
+                {
+                  $lookup: {
+                    from: 'users',
+                    localField: 'sender',
+                    foreignField: '_id',
+                    as: 'sender',
+                    pipeline: [{ $project: { fName: 1, lName: 1, email: 1 } }]
+                  }
+                },
+                { $unwind: { path: '$sender', preserveNullAndEmptyArrays: true } }
+              ],
+              as: 'lastMessage'
+            }
+          },
+          { $unwind: { path: '$lastMessage', preserveNullAndEmptyArrays: true } },
+          
+          // Populate createdBy
+          {
+            $lookup: {
+              from: 'users',
+              localField: 'createdBy',
+              foreignField: '_id',
+              as: 'createdBy',
+              pipeline: [{ $project: { fName: 1, lName: 1, email: 1 } }]
+            }
+          },
+          { $unwind: { path: '$createdBy', preserveNullAndEmptyArrays: true } },
+          
+          // Populate members.user
+          {
+            $lookup: {
+              from: 'users',
+              let: { userIds: '$members.user' },
+              pipeline: [
+                { $match: { $expr: { $in: ['$_id', '$$userIds'] } } },
+                { $project: { fName: 1, lName: 1, email: 1 } }
+              ],
+              as: 'memberUsers'
+            }
+          },
+          {
+            $addFields: {
+              members: {
+                $map: {
+                  input: '$members',
+                  as: 'member',
+                  in: {
+                    $mergeObjects: [
+                      '$$member',
+                      {
+                        user: {
+                          $arrayElemAt: [
+                            {
+                              $filter: {
+                                input: '$memberUsers',
+                                as: 'mu',
+                                cond: { $eq: ['$$mu._id', '$$member.user'] }
+                              }
+                            },
+                            0
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          { $project: { memberUsers: 0 } }
+        ]
+      }
+    }
+  ]);
 
-  const total = await Group.countDocuments({
-    'members.user': userId,
-    isActive: true,
-  });
+  const groups = result.groups;
+  const total = result.total[0]?.count || 0;
 
   return {
     groups,

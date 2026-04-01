@@ -8,11 +8,11 @@ const deviceSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
-    deviceId: {
-      type: String,
-      required: true,
-      trim: true,
-    },
+    // deviceId: {
+    //   type: String,
+    //   required: true,
+    //   trim: true,
+    // },
     deviceName: {
       type: String,
       trim: true,
