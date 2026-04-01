@@ -6,12 +6,12 @@ import Device from '../models/device.model.js';
  * @param {Object} deviceData - { deviceId, deviceName, platform, pushToken }
  * @returns {Promise<Device>}
  */
-export const registerDevice = async (userId, { deviceId, deviceName, platform, pushToken }) => {
+export const registerDevice = async (userId, { deviceName, platform, pushToken }) => {
   const device = await Device.findOneAndUpdate(
-    { userId, deviceId },
+    { userId },
     {
       userId,
-      deviceId,
+      // deviceId,
       deviceName,
       platform,
       pushToken,

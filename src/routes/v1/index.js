@@ -29,7 +29,15 @@ router.get('/status', (req, res) => {
 
 router.use('/auth', authRoute.default || authRoute);
 router.use('/group', groupRoute);
-router.use('/message', messageRoute);
+router.use('/message',
+  (req, res, next) => {
+    console.log("Message call",
+      req.body, "-------------------------->>>>",
+      req.params, "qurtyyyyyyyyyyyy",
+      req.query)
+    next();
+    },
+  messageRoute);
 router.use('/trip', tripRoute);
 router.use('/event', eventRoute);
 router.use('/sse', sseRoute);

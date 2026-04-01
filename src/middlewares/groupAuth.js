@@ -1,5 +1,6 @@
+import mongoose from 'mongoose';
 import Group from '../models/group.model.js';
-import { sendUnauthorized, sendNotFound } from '../utils/errorHandler.js';
+import { sendUnauthorized, sendNotFound, sendBadRequest } from '../utils/errorHandler.js';
 
 /**
  * Verify user is a member of the group
@@ -8,6 +9,10 @@ export const verifyGroupMembership = async (req, res, next) => {
   try {
     const groupId = req.params.id || req.params.groupId;
     const userId = req.user._id;
+
+    if (!mongoose.Types.ObjectId.isValid(groupId)) {
+      return sendBadRequest(res, 'Invalid group ID format');
+    }
 
     const group = await Group.findOne({ _id: groupId, isActive: true });
 
@@ -22,7 +27,7 @@ export const verifyGroupMembership = async (req, res, next) => {
     req.group = group;
     next();
   } catch (error) {
-    return sendUnauthorized(res, 'Invalid group');
+    return sendBadRequest(res, 'Failed to verify group membership');
   }
 };
 
@@ -33,6 +38,10 @@ export const verifyGroupAdmin = async (req, res, next) => {
   try {
     const groupId = req.params.id || req.params.groupId;
     const userId = req.user._id;
+
+    if (!mongoose.Types.ObjectId.isValid(groupId)) {
+      return sendBadRequest(res, 'Invalid group ID format');
+    }
 
     const group = await Group.findOne({ _id: groupId, isActive: true });
 
@@ -47,7 +56,7 @@ export const verifyGroupAdmin = async (req, res, next) => {
     req.group = group;
     next();
   } catch (error) {
-    return sendUnauthorized(res, 'Invalid group');
+    return sendBadRequest(res, 'Failed to verify group admin status');
   }
 };
 
@@ -58,6 +67,10 @@ export const verifyGroupCreator = async (req, res, next) => {
   try {
     const groupId = req.params.id || req.params.groupId;
     const userId = req.user._id;
+
+    if (!mongoose.Types.ObjectId.isValid(groupId)) {
+      return sendBadRequest(res, 'Invalid group ID format');
+    }
 
     const group = await Group.findOne({ _id: groupId, isActive: true });
 
@@ -72,6 +85,6 @@ export const verifyGroupCreator = async (req, res, next) => {
     req.group = group;
     next();
   } catch (error) {
-    return sendUnauthorized(res, 'Invalid group');
+    return sendBadRequest(res, 'Failed to verify group creator status');
   }
 };

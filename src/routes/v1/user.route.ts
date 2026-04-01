@@ -1,8 +1,8 @@
 import { Router } from 'express';
-import { getMe, updateMe } from '../../controllers/user.controller.js';
+import { getMe, updateMe, searchUsers } from '../../controllers/user.controller.js';
 import authMiddleware from '../../middlewares/auth.middleware.js';
 import { validate } from '../../middlewares/validate.middleware.js';
-import { updateMeSchema } from '../../validations/user.validation.js';
+import { updateMeSchema, searchUsersSchema } from '../../validations/user.validation.js';
 
 const router = Router();
 
@@ -17,7 +17,13 @@ router.get('/me', authMiddleware, getMe);
  * Security: authMiddleware required
  * Updates fName, lName, and/or userId. userId must be globally unique.
  */
-router.patch('/me', 
-    (req, res, next)=> {console.log("call here", req.body, req.params, req.query); next()},authMiddleware, validate(updateMeSchema), updateMe);
+router.patch('/me', authMiddleware, validate(updateMeSchema), updateMe);
+
+/**
+ * GET /user/search
+ * Security: authMiddleware required
+ * Fuzzy search for users by name or userId. Paginated.
+ */
+router.get('/search', authMiddleware, validate(searchUsersSchema, 'query'), searchUsers);
 
 export default router;

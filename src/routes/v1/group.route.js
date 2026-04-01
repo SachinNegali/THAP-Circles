@@ -12,6 +12,9 @@ router.use(auth);
 // Group management routes
 router.post('/', groupController.createGroup);
 router.get('/', groupController.getUserGroups);
+router.post('/dm', groupController.createDM);
+router.get('/dm/:recipientId/messages', groupController.getDMMessages);
+router.post('/dm/:recipientId/messages', groupController.sendDMMessage);
 router.get('/:id', verifyGroupMembership, groupController.getGroup);
 router.patch('/:id', verifyGroupMembership, groupController.updateGroup);
 router.delete('/:id', verifyGroupCreator, groupController.deleteGroup);

@@ -74,3 +74,54 @@ export const updateMe = async (req: Request, res: Response): Promise<void> => {
     lastLogin: user.lastLogin,
   });
 };
+
+/**
+ * GET /user/search
+ *
+ * Search for users by fName, lName, or userId.
+ * Supports fuzzy search and pagination.
+ */
+export const searchUsers = async (req: Request, res: Response): Promise<void> => {
+  const { q, page, limit } = req.query as unknown as {
+    q: string;
+    page: number;
+    limit: number;
+  };
+
+  const skip = (page - 1) * limit;
+
+  // Fuzzy search query: matches q in fName, lName, or userId
+  const query = q
+    ? {
+        $or: [
+          { fName: { $regex: q, $options: 'i' } },
+          { lName: { $regex: q, $options: 'i' } },
+          { userId: { $regex: q, $options: 'i' } },
+        ],
+      }
+    : {};
+
+  /**
+   * Fetch users matching the query with projection and pagination.
+   * We return only the fields requested by the user.
+   */
+  const users = await User.find(query)
+    .select('fName lName userId picture')
+    .skip(skip)
+    .limit(limit)
+    .lean();
+
+  const totalResults = await User.countDocuments(query);  
+  res.status(200).json({
+    users: users.map((u: any) => ({
+      id: u._id,
+      name: `${u.fName} ${u.lName}`.trim(),
+      userId: u.userId || null,
+      picture: u.picture || '',
+    })),
+    page,
+    limit,
+    totalPages: Math.ceil(totalResults / limit),
+    totalResults,
+  });
+};
