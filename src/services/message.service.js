@@ -41,7 +41,7 @@ export const sendMessage = async (groupId, senderId, content, type = 'text', met
   await group.save();
 
   // Populate sender info
-  await message.populate('sender', 'fName lName email');
+  await message.populate('sender', 'fName lName');
 
   // Send notifications to all group members except sender
   const recipientIds = group.members
@@ -53,6 +53,13 @@ export const sendMessage = async (groupId, senderId, content, type = 'text', met
     const contentPreview = content.length > 50 ? content.substring(0, 50) + '...' : content;
 
     // Create notifications for all recipients
+    console.log("bEFORE NOTIF CONTROLLER", 'message.new', `${sender.fName} ${group.name ? "in " + group.name : ""}`, contentPreview, {
+      groupId: group._id,
+      groupName: group.name,
+      messageId: message._id,
+      senderId: sender._id,
+      senderName: `${sender.fName} ${sender.lName}`,
+    })
     const notifications = await notificationService.createNotifications(
       recipientIds,
       'message.new',
@@ -71,13 +78,14 @@ export const sendMessage = async (groupId, senderId, content, type = 'text', met
     const deliveredUserIds = notifications
       .filter((notif) => notif.isDelivered)
       .map((notif) => notif.user);
-
+  console.log("DELEOVERD USERIDS...", deliveredUserIds)
     if (deliveredUserIds.length > 0) {
       for (const userId of deliveredUserIds) {
         await message.markAsDeliveredTo(userId);
       }
 
       // Send delivery receipt to sender
+      console.log("SENDING RECEIPTS", senderId, 'message.delivered', 'Message delivered', `Your message was delivered to ${deliveredUserIds.length} member(s)`)
       await notificationService.createNotification(
         senderId,
         'message.delivered',

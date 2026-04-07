@@ -77,3 +77,21 @@ export const isDeviceRegistered = async (userId, deviceId) => {
   const device = await Device.findOne({ userId, deviceId });
   return !!device;
 };
+
+/**
+ * Get devices with a valid push token for a user
+ * @param {ObjectId} userId
+ * @returns {Promise<Array<Device>>}
+ */
+export const getDevicesWithPushToken = async (userId) => {
+  return Device.find({ userId, pushToken: { $ne: null } });
+};
+
+/**
+ * Remove a stale push token from any device that has it
+ * @param {string} pushToken
+ * @returns {Promise<void>}
+ */
+export const removePushToken = async (pushToken) => {
+  await Device.updateMany({ pushToken }, { $set: { pushToken: null } });
+};
