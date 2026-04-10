@@ -80,7 +80,7 @@ export const sendMessage = async (groupId, senderId, content, type = 'text', met
     const deliveredUserIds = notifications
       .filter((notif) => notif.isDelivered)
       .map((notif) => notif.user);
-  console.log("DELEOVERD USERIDS...", deliveredUserIds)
+  // console.log("DELEOVERD USERIDS...", deliveredUserIds)
     if (deliveredUserIds.length > 0) {
       for (const userId of deliveredUserIds) {
         await message.markAsDeliveredTo(userId);
