@@ -128,3 +128,5 @@ dist/
 # Firebase service account credentials
 .firebase-service-account.json
 firebase-service-account.json
+firebase-service-account.json.json
+firebase-service-account.json
