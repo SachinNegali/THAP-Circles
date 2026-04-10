@@ -9,7 +9,7 @@ import sseManager from '../services/sse.service.js';
  */
 export const streamSSE = async (req, res) => {
   const userId = req.user._id;
-
+  console.log("INSIDEE HEREEE....")
   // Set SSE headers
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -17,6 +17,7 @@ export const streamSSE = async (req, res) => {
   res.setHeader('X-Accel-Buffering', 'no'); // Disable buffering for nginx
 
   // Send initial connection success event
+  console.log("write connection")
   res.write(`event: connected\ndata: ${JSON.stringify({ userId: userId.toString(), timestamp: Date.now() })}\n\n`);
 
   // Register connection
@@ -28,7 +29,7 @@ export const streamSSE = async (req, res) => {
     
     if (undelivered.length > 0) {
       const notificationIds = [];
-      
+      console.log("undelivered", undelivered)
       undelivered.forEach((notification) => {
         const sent = sseManager.sendToUser(userId, 'notification', {
           id: notification._id,

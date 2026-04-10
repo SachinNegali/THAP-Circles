@@ -2,6 +2,7 @@ import Message from '../models/message.model.js';
 import Group from '../models/group.model.js';
 import User from '../models/user.model.js';
 import * as notificationService from './notification.service.js';
+import sseManager from './sse.service.js';
 
 /**
  * Send a message to a group
@@ -40,13 +41,16 @@ export const sendMessage = async (groupId, senderId, content, type = 'text', met
   group.lastActivity = new Date();
   await group.save();
 
-  // Populate sender info
-  await message.populate('sender', 'fName lName');
-
   // Send notifications to all group members except sender
   const recipientIds = group.members
     .filter((member) => member.user.toString() !== senderId.toString())
     .map((member) => member.user);
+
+  // Broadcast raw message object via SSE so clients can append directly to
+  // their message array (same shape as GET /messages response items).
+  if (recipientIds.length > 0) {
+    sseManager.sendToUsers(recipientIds, 'message.new', message.toJSON());
+  }
 
   if (recipientIds.length > 0) {
     const sender = await User.findById(senderId);
@@ -58,7 +62,6 @@ export const sendMessage = async (groupId, senderId, content, type = 'text', met
       groupName: group.name,
       messageId: message._id,
       senderId: sender._id,
-      senderName: `${sender.fName} ${sender.lName}`,
     })
     const notifications = await notificationService.createNotifications(
       recipientIds,
@@ -70,7 +73,6 @@ export const sendMessage = async (groupId, senderId, content, type = 'text', met
         groupName: group.name,
         messageId: message._id,
         senderId: sender._id,
-        senderName: `${sender.fName} ${sender.lName}`,
       }
     );
 
@@ -131,7 +133,7 @@ export const getMessages = async (groupId, userId, page = 1, limit = 50) => {
     .sort({ createdAt: -1 })
     .skip(skip)
     .limit(limit)
-    .populate('sender', 'fName lName email');
+;
 
   const total = await Message.countDocuments({
     group: groupId,
@@ -233,7 +235,6 @@ export const markAsRead = async (messageId, userId) => {
         groupId: messageGroup._id,
         groupName: messageGroup.name,
         readerId: userId,
-        readerName: `${reader.fName} ${reader.lName}`,
       }
     );
   }
