@@ -87,7 +87,7 @@ export const sendMessage = async (groupId, senderId, content, type = 'text', met
       }
 
       // Send delivery receipt to sender
-      console.log("SENDING RECEIPTS", senderId, 'message.delivered', 'Message delivered', `Your message was delivered to ${deliveredUserIds.length} member(s)`)
+      // console.log("SENDING RECEIPTS", senderId, 'message.delivered', 'Message delivered', `Your message was delivered to ${deliveredUserIds.length} member(s)`)
       await notificationService.createNotification(
         senderId,
         'message.delivered',
