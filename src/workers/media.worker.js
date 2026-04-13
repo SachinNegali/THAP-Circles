@@ -2,8 +2,8 @@ import { Worker } from 'bullmq';
 import sharp from 'sharp';
 import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import MediaUpload from '../models/mediaUpload.model.js';
-import Group from '../models/group.model.js';
 import sseManager from '../services/sse.service.js';
+import { updateMessageImage } from '../services/message.service.js';
 
 const REDIS_CONNECTION = {
   host: process.env.REDIS_HOST || '127.0.0.1',
@@ -114,33 +114,26 @@ const mediaWorker = new Worker(
       }
     );
 
-    // 7. Check if ALL images for this message are complete
-    const pendingCount = await MediaUpload.countDocuments({
-      messageId,
-      status: { $ne: 'completed' },
+    // 7. Update the Message document's metadata.images entry and broadcast
+    //    `message.image_updated` (and, when all images are done, `message.media_ready`)
+    //    to every group member. This is what makes images actually show in chat.
+    const messageUpdate = await updateMessageImage(messageId, imageId, {
+      status: 'completed',
+      thumbnailUrl,
+      optimizedUrl,
+      width: metadata.width,
+      height: metadata.height,
     });
-    const allComplete = pendingCount === 0;
 
-    // 8. Notify uploader via SSE
+    const allComplete = messageUpdate?.allComplete ?? false;
+
+    // 8. Notify uploader specifically with their progress event
     sseManager.sendToUser(userId, 'upload:status', {
       imageId, messageId, chatId, status: 'completed',
       thumbnailUrl, optimizedUrl,
       width: metadata.width, height: metadata.height,
       allImagesComplete: allComplete,
     });
-
-    // 9. If all done, notify other chat participants
-    if (allComplete) {
-      const group = await Group.findById(chatId);
-      if (group) {
-        const otherMembers = group.members
-          .filter((m) => m.user.toString() !== userId.toString())
-          .map((m) => m.user);
-        sseManager.sendToUsers(otherMembers, 'message:media-ready', {
-          messageId, chatId,
-        });
-      }
-    }
 
     return { completed: true, imageId };
   },
@@ -151,19 +144,22 @@ const mediaWorker = new Worker(
   }
 );
 
-// On final failure, notify the user
-mediaWorker.on('failed', (job, err) => {
+// On final failure, mark the MediaUpload + Message image entry as failed and
+// broadcast the status so the chat UI can show a retry/error state.
+mediaWorker.on('failed', async (job, err) => {
   console.error(`[media-worker] Job ${job.id} failed (attempt ${job.attemptsMade}/${job.opts.attempts}):`, err.message);
 
   if (job.attemptsMade >= job.opts.attempts) {
     const { imageId, messageId, chatId, userId } = job.data;
-    MediaUpload.updateOne({ imageId }, { $set: { status: 'failed', updatedAt: new Date() } })
-      .then(() => {
-        sseManager.sendToUser(userId, 'upload:status', {
-          imageId, messageId, chatId, status: 'failed',
-        });
-      })
-      .catch(console.error);
+    try {
+      await MediaUpload.updateOne({ imageId }, { $set: { status: 'failed', updatedAt: new Date() } });
+      await updateMessageImage(messageId, imageId, { status: 'failed' });
+      sseManager.sendToUser(userId, 'upload:status', {
+        imageId, messageId, chatId, status: 'failed',
+      });
+    } catch (e) {
+      console.error('[media-worker] error handling final failure:', e);
+    }
   }
 });
 

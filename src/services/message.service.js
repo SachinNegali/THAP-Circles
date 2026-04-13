@@ -29,12 +29,29 @@ export const sendMessage = async (groupId, senderId, content, type = 'text', met
     throw new Error('Only admins can send messages in this group');
   }
 
+  // For image messages with imageIds provided, initialize pending placeholders.
+  // The client uploads each image afterwards using this message's _id as messageId.
+  let finalMetadata = metadata || {};
+  if (type === 'image' && Array.isArray(finalMetadata.imageIds) && finalMetadata.imageIds.length > 0) {
+    finalMetadata = {
+      ...finalMetadata,
+      images: finalMetadata.imageIds.map((imageId) => ({
+        imageId,
+        status: 'pending',
+        thumbnailUrl: null,
+        optimizedUrl: null,
+        width: null,
+        height: null,
+      })),
+    };
+  }
+
   const message = await Message.create({
     group: groupId,
     sender: senderId,
-    content,
+    content: content || '',
     type,
-    metadata,
+    metadata: finalMetadata,
   });
 
   // Update group last activity
@@ -198,6 +215,63 @@ export const deleteMessage = async (messageId, userId) => {
   }
 
   return message;
+};
+
+/**
+ * Update a single image entry within an image-type Message's metadata and
+ * broadcast the change to all group members via SSE so chat UIs can swap
+ * placeholders for real thumbnails once processing finishes.
+ *
+ * @param {String} messageId  - Mongo _id of the Message document
+ * @param {String} imageId    - client-generated UUID identifying the image
+ * @param {Object} update     - { status, thumbnailUrl, optimizedUrl, width, height }
+ * @returns {Promise<{message: Message, allComplete: boolean} | null>}
+ */
+export const updateMessageImage = async (messageId, imageId, update) => {
+  const message = await Message.findById(messageId);
+  if (!message) {
+    console.warn(`[updateMessageImage] Message ${messageId} not found`);
+    return null;
+  }
+
+  const images = Array.isArray(message.metadata?.images) ? message.metadata.images : [];
+  const idx = images.findIndex((img) => img.imageId === imageId);
+  if (idx === -1) {
+    console.warn(`[updateMessageImage] imageId ${imageId} not found on message ${messageId}`);
+    return null;
+  }
+
+  images[idx] = { ...images[idx], ...update };
+
+  const allComplete = images.every((img) => img.status === 'completed');
+
+  // Mixed-type fields need explicit markModified so Mongoose persists nested changes.
+  message.metadata = { ...message.metadata, images };
+  message.markModified('metadata');
+  await message.save();
+
+  // Broadcast to every group member (uploader + others) so all clients update.
+  const group = await Group.findById(message.group);
+  if (group) {
+    const memberIds = group.members.map((m) => m.user);
+    sseManager.sendToUsers(memberIds, 'message.image_updated', {
+      messageId: message._id.toString(),
+      groupId: message.group.toString(),
+      imageId,
+      image: images[idx],
+      allComplete,
+    });
+
+    if (allComplete) {
+      sseManager.sendToUsers(memberIds, 'message.media_ready', {
+        messageId: message._id.toString(),
+        groupId: message.group.toString(),
+        images,
+      });
+    }
+  }
+
+  return { message, allComplete };
 };
 
 /**

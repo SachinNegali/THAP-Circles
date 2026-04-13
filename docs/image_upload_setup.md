@@ -5,18 +5,56 @@ This guide walks through setting up the infrastructure required by the backgroun
 ## Architecture Overview
 
 ```
-Client ──(1) init──▶ Server ──▶ MongoDB (MediaUpload record)
-Client ──(2) PUT──▶ S3 (uploads/)
-Client ──(3) complete──▶ Server ──▶ BullMQ (Redis)
-                                      │
-                                      ▼
-                              Worker (sharp processing)
-                              ├─▶ S3 (thumbs/, optimized/)
-                              ├─▶ MongoDB (update status)
-                              └─▶ SSE (notify clients)
+Client ──(0) POST /groups/:id/messages (type='image', metadata.imageIds=[...]) 
+         ──▶ Server creates Message w/ pending image placeholders
+         ──▶ SSE "message.new" to all group members
+         ──▶ returns Message._id
+
+Client ──(1) /upload/init   (messageId=Message._id, imageId=UUID)  ──▶ MediaUpload row
+Client ──(2) PUT  ──▶ S3 (uploads/)
+Client ──(3) /upload/complete                                       ──▶ BullMQ (Redis)
+                                                                           │
+                                                                           ▼
+                                                                    Worker (sharp)
+                                                                    ├─▶ S3 (thumbs/, optimized/)
+                                                                    ├─▶ MediaUpload.status = completed
+                                                                    ├─▶ Message.metadata.images[i] = {url,w,h,status}
+                                                                    ├─▶ SSE "message.image_updated" to members
+                                                                    ├─▶ SSE "message.media_ready" when all done
+                                                                    └─▶ SSE "upload:status" to uploader
 ```
 
 **Required infrastructure:** Redis (for BullMQ), AWS S3 bucket, IAM credentials.
+
+## Client Flow (end-to-end)
+
+1. **Pick N images, generate UUIDs** for each (`imageId`s).
+2. **Create the message first** — `POST /v1/group/:id/messages`:
+   ```json
+   {
+     "type": "image",
+     "content": "optional caption",
+     "metadata": { "imageIds": ["uuid-1", "uuid-2"] }
+   }
+   ```
+   Response includes the new `Message._id`. The chat UI immediately shows this message with placeholder tiles (sender + all other members receive it via SSE `message.new`).
+3. **For each image**:
+   - `POST /v1/media/upload/init` with `{ chatId, messageId: Message._id, imageId, mimeType, sizeBytes }` → returns `presignedUrl`
+   - `PUT` the raw bytes to `presignedUrl` (directly to S3, not through the server)
+   - `POST /v1/media/upload/complete` with `{ imageId }`
+4. **Listen on SSE stream** (`GET /v1/sse/stream`):
+   - `upload:status` — per-image progress (uploader only)
+   - `message.image_updated` — one image finished processing; swap that tile's placeholder for `image.thumbnailUrl` / `image.optimizedUrl` (all members)
+   - `message.media_ready` — all images for a message done (all members)
+
+## SSE Event Reference
+
+| Event | Recipients | Payload |
+|---|---|---|
+| `message.new` | all group members | full message object (with pending image placeholders) |
+| `upload:status` | uploader only | `{ imageId, messageId, chatId, status, thumbnailUrl?, optimizedUrl?, width?, height?, allImagesComplete }` |
+| `message.image_updated` | all group members | `{ messageId, groupId, imageId, image: {status, thumbnailUrl, optimizedUrl, width, height}, allComplete }` |
+| `message.media_ready` | all group members | `{ messageId, groupId, images: [...] }` |
 
 ---
 

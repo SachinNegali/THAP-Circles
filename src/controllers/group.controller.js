@@ -225,12 +225,18 @@ export const sendMessage = async (req, res) => {
     const senderId = req.user._id;
     const { content, type, metadata } = req.body;
 
-    if (!content) {
+    // Image/file messages may have empty content (no caption) but must carry payload metadata
+    const isMediaType = type === 'image' || type === 'file';
+    if (!isMediaType && !content) {
       return sendBadRequest(res, 'Message content is required');
+    }
+    if (type === 'image' && (!metadata?.imageIds || !Array.isArray(metadata.imageIds) || metadata.imageIds.length === 0)) {
+      return sendBadRequest(res, 'metadata.imageIds array is required for image messages');
     }
 
     const messageService = await import('../services/message.service.js');
-    const message = await messageService.sendMessage(groupId, senderId, content, type, metadata);
+    const contentForImage = isMediaType ? "Sent an Image" : content;
+    const message = await messageService.sendMessage(groupId, senderId, contentForImage, type, metadata);
 
     res.status(201).send({
       message: 'Message sent successfully',
@@ -256,8 +262,12 @@ export const sendDMMessage = async (req, res) => {
       return sendBadRequest(res, 'recipientId is required');
     }
 
-    if (!content) {
+    const isMediaType = type === 'image' || type === 'file';
+    if (!isMediaType && !content) {
       return sendBadRequest(res, 'Message content is required');
+    }
+    if (type === 'image' && (!metadata?.imageIds || !Array.isArray(metadata.imageIds) || metadata.imageIds.length === 0)) {
+      return sendBadRequest(res, 'metadata.imageIds array is required for image messages');
     }
 
     // Create or retrieve the DM group
