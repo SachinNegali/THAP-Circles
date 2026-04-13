@@ -565,6 +565,7 @@ app.get('/health', (res, req) => {
 // Start server
 app.listen(PORT, (token) => {
   if (token) {
+    console.log("Tracking server... THIS IS TOKENN", token)
     console.log(`\n🚀 Tracking Server listening on port ${PORT}`);
     console.log(`📊 WebSocket endpoint: ws://localhost:${PORT}/?token=YOUR_JWT&groupId=YOUR_GROUP`);
     console.log(`💚 Health check: http://localhost:${PORT}/health\n`);
