@@ -4,9 +4,17 @@ const groupSchema = new mongoose.Schema(
   {
     name: {
       type: String,
-      required: true,
+      required: function () {
+        return this.type === 'group';
+      },
       trim: true,
       maxlength: 100,
+    },
+    type: {
+      type: String,
+      enum: ['dm', 'group'],
+      default: 'group',
+      index: true,
     },
     description: {
       type: String,
@@ -81,7 +89,7 @@ groupSchema.index({ isActive: 1, lastActivity: -1 });
  * @returns {boolean}
  */
 groupSchema.methods.isMember = function (userId) {
-  return this.members.some((member) => member.user.toString() === userId.toString());
+  return this.members.some((member) => member.user?._id?.toString() === userId.toString());
 };
 
 /**

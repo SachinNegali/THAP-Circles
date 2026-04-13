@@ -26,16 +26,23 @@ import { z } from 'zod';
  *
  * @param schema - Zod schema that describes the expected req.body shape
  */
-export const validate = (schema: z.ZodType) => {
+export const validate = (schema: z.ZodType, source: 'body' | 'query' | 'params' = 'body') => {
   return (req: Request, res: Response, next: NextFunction): void => {
     try {
       /**
-       * Spread req.body into a plain object to strip the null prototype.
+       * Spread req[source] into a plain object to strip the null prototype.
        * Express 5 creates req.body as [Object: null prototype] which
        * can confuse Zod's instanceof checks.
        */
-      const body = { ...req.body };
-      schema.parse(body);
+      const data = { ...(req[source] as object) };
+      const parsedData = schema.parse(data);
+
+      /**
+       * Replace the original req[source] with the parsed data.
+       * This ensures that transformations (e.g., .transform(), .trim())
+       * are available in the controller.
+       */
+      Object.assign(req[source], parsedData);
 
       next();
     } catch (error) {

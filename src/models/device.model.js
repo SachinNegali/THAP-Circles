@@ -8,11 +8,11 @@ const deviceSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
-    deviceId: {
-      type: String,
-      required: true,
-      trim: true,
-    },
+    // deviceId: {
+    //   type: String,
+    //   required: true,
+    //   trim: true,
+    // },
     deviceName: {
       type: String,
       trim: true,
@@ -41,8 +41,8 @@ const deviceSchema = new mongoose.Schema(
   }
 );
 
-// Unique compound index: one device per user
-deviceSchema.index({ userId: 1, deviceId: 1 }, { unique: true });
+// Unique index: one device per user
+deviceSchema.index({ userId: 1 }, { unique: true });
 // For fetching devices sorted by activity
 deviceSchema.index({ userId: 1, lastActiveAt: -1 });
 

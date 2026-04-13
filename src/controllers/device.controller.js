@@ -9,10 +9,10 @@ import { sendE2EError } from '../utils/e2eErrors.js';
 export const registerDevice = async (req, res) => {
   try {
     const userId = req.user._id;
-    const { deviceId, deviceName, platform, pushToken } = req.body;
+    const { deviceName, platform, pushToken } = req.body;
 
-    if (!deviceId || !platform) {
-      return sendBadRequest(res, 'deviceId and platform are required');
+    if (!platform) {
+      return sendBadRequest(res, 'platform is required');
     }
 
     if (!['ios', 'android'].includes(platform)) {
@@ -20,7 +20,7 @@ export const registerDevice = async (req, res) => {
     }
 
     const device = await deviceService.registerDevice(userId, {
-      deviceId,
+      // deviceId,
       deviceName,
       platform,
       pushToken,

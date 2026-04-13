@@ -4,6 +4,10 @@ dotenv.config();
 import app from './src/app.js';
 import connectDB from './src/config/db.js';
 
+// Image processing worker & reconciliation cron (same-process mode)
+import './src/workers/media.worker.js';
+import './src/cron/reconcile-uploads.js';
+
 // Connect to Database
 connectDB();
 

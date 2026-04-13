@@ -6,12 +6,12 @@ import Device from '../models/device.model.js';
  * @param {Object} deviceData - { deviceId, deviceName, platform, pushToken }
  * @returns {Promise<Device>}
  */
-export const registerDevice = async (userId, { deviceId, deviceName, platform, pushToken }) => {
+export const registerDevice = async (userId, { deviceName, platform, pushToken }) => {
   const device = await Device.findOneAndUpdate(
-    { userId, deviceId },
+    { userId },
     {
       userId,
-      deviceId,
+      // deviceId,
       deviceName,
       platform,
       pushToken,
@@ -76,4 +76,22 @@ export const updateLastActive = async (userId, deviceId) => {
 export const isDeviceRegistered = async (userId, deviceId) => {
   const device = await Device.findOne({ userId, deviceId });
   return !!device;
+};
+
+/**
+ * Get devices with a valid push token for a user
+ * @param {ObjectId} userId
+ * @returns {Promise<Array<Device>>}
+ */
+export const getDevicesWithPushToken = async (userId) => {
+  return Device.find({ userId, pushToken: { $ne: null } });
+};
+
+/**
+ * Remove a stale push token from any device that has it
+ * @param {string} pushToken
+ * @returns {Promise<void>}
+ */
+export const removePushToken = async (pushToken) => {
+  await Device.updateMany({ pushToken }, { $set: { pushToken: null } });
 };

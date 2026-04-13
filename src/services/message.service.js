@@ -2,6 +2,7 @@ import Message from '../models/message.model.js';
 import Group from '../models/group.model.js';
 import User from '../models/user.model.js';
 import * as notificationService from './notification.service.js';
+import sseManager from './sse.service.js';
 
 /**
  * Send a message to a group
@@ -28,31 +29,57 @@ export const sendMessage = async (groupId, senderId, content, type = 'text', met
     throw new Error('Only admins can send messages in this group');
   }
 
+  // For image messages with imageIds provided, initialize pending placeholders.
+  // The client uploads each image afterwards using this message's _id as messageId.
+  let finalMetadata = metadata || {};
+  if (type === 'image' && Array.isArray(finalMetadata.imageIds) && finalMetadata.imageIds.length > 0) {
+    finalMetadata = {
+      ...finalMetadata,
+      images: finalMetadata.imageIds.map((imageId) => ({
+        imageId,
+        status: 'pending',
+        thumbnailUrl: null,
+        optimizedUrl: null,
+        width: null,
+        height: null,
+      })),
+    };
+  }
+
   const message = await Message.create({
     group: groupId,
     sender: senderId,
-    content,
+    content: content || '',
     type,
-    metadata,
+    metadata: finalMetadata,
   });
 
   // Update group last activity
   group.lastActivity = new Date();
   await group.save();
 
-  // Populate sender info
-  await message.populate('sender', 'fName lName email');
-
   // Send notifications to all group members except sender
   const recipientIds = group.members
     .filter((member) => member.user.toString() !== senderId.toString())
     .map((member) => member.user);
+
+  // Broadcast raw message object via SSE so clients can append directly to
+  // their message array (same shape as GET /messages response items).
+  if (recipientIds.length > 0) {
+    sseManager.sendToUsers(recipientIds, 'message.new', message.toJSON());
+  }
 
   if (recipientIds.length > 0) {
     const sender = await User.findById(senderId);
     const contentPreview = content.length > 50 ? content.substring(0, 50) + '...' : content;
 
     // Create notifications for all recipients
+    console.log("bEFORE NOTIF CONTROLLER", 'message.new', `${sender.fName} ${group.name ? "in " + group.name : ""}`, contentPreview, {
+      groupId: group._id,
+      groupName: group.name,
+      messageId: message._id,
+      senderId: sender._id,
+    })
     const notifications = await notificationService.createNotifications(
       recipientIds,
       'message.new',
@@ -63,7 +90,6 @@ export const sendMessage = async (groupId, senderId, content, type = 'text', met
         groupName: group.name,
         messageId: message._id,
         senderId: sender._id,
-        senderName: `${sender.fName} ${sender.lName}`,
       }
     );
 
@@ -71,13 +97,14 @@ export const sendMessage = async (groupId, senderId, content, type = 'text', met
     const deliveredUserIds = notifications
       .filter((notif) => notif.isDelivered)
       .map((notif) => notif.user);
-
+  // console.log("DELEOVERD USERIDS...", deliveredUserIds)
     if (deliveredUserIds.length > 0) {
       for (const userId of deliveredUserIds) {
         await message.markAsDeliveredTo(userId);
       }
 
       // Send delivery receipt to sender
+      // console.log("SENDING RECEIPTS", senderId, 'message.delivered', 'Message delivered', `Your message was delivered to ${deliveredUserIds.length} member(s)`)
       await notificationService.createNotification(
         senderId,
         'message.delivered',
@@ -123,7 +150,7 @@ export const getMessages = async (groupId, userId, page = 1, limit = 50) => {
     .sort({ createdAt: -1 })
     .skip(skip)
     .limit(limit)
-    .populate('sender', 'fName lName email');
+;
 
   const total = await Message.countDocuments({
     group: groupId,
@@ -191,6 +218,63 @@ export const deleteMessage = async (messageId, userId) => {
 };
 
 /**
+ * Update a single image entry within an image-type Message's metadata and
+ * broadcast the change to all group members via SSE so chat UIs can swap
+ * placeholders for real thumbnails once processing finishes.
+ *
+ * @param {String} messageId  - Mongo _id of the Message document
+ * @param {String} imageId    - client-generated UUID identifying the image
+ * @param {Object} update     - { status, thumbnailUrl, optimizedUrl, width, height }
+ * @returns {Promise<{message: Message, allComplete: boolean} | null>}
+ */
+export const updateMessageImage = async (messageId, imageId, update) => {
+  const message = await Message.findById(messageId);
+  if (!message) {
+    console.warn(`[updateMessageImage] Message ${messageId} not found`);
+    return null;
+  }
+
+  const images = Array.isArray(message.metadata?.images) ? message.metadata.images : [];
+  const idx = images.findIndex((img) => img.imageId === imageId);
+  if (idx === -1) {
+    console.warn(`[updateMessageImage] imageId ${imageId} not found on message ${messageId}`);
+    return null;
+  }
+
+  images[idx] = { ...images[idx], ...update };
+
+  const allComplete = images.every((img) => img.status === 'completed');
+
+  // Mixed-type fields need explicit markModified so Mongoose persists nested changes.
+  message.metadata = { ...message.metadata, images };
+  message.markModified('metadata');
+  await message.save();
+
+  // Broadcast to every group member (uploader + others) so all clients update.
+  const group = await Group.findById(message.group);
+  if (group) {
+    const memberIds = group.members.map((m) => m.user);
+    sseManager.sendToUsers(memberIds, 'message.image_updated', {
+      messageId: message._id.toString(),
+      groupId: message.group.toString(),
+      imageId,
+      image: images[idx],
+      allComplete,
+    });
+
+    if (allComplete) {
+      sseManager.sendToUsers(memberIds, 'message.media_ready', {
+        messageId: message._id.toString(),
+        groupId: message.group.toString(),
+        images,
+      });
+    }
+  }
+
+  return { message, allComplete };
+};
+
+/**
  * Mark message as read
  * @param {ObjectId} messageId
  * @param {ObjectId} userId
@@ -225,7 +309,6 @@ export const markAsRead = async (messageId, userId) => {
         groupId: messageGroup._id,
         groupName: messageGroup.name,
         readerId: userId,
-        readerName: `${reader.fName} ${reader.lName}`,
       }
     );
   }

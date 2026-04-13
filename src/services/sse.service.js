@@ -76,13 +76,15 @@ class SSEConnectionManager {
   sendToUser(userId, event, data) {
     const userIdStr = userId.toString();
     const res = this.connections.get(userIdStr);
-
+    // console.log("RES", res)
+    // console.log("connectionnn", this.connections.get(userIdStr))
     if (!res) {
       return false;
     }
 
     try {
       const sseData = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+      // console.log("RHIS DATA DATA", "--------------", sseData, "\n============",data)
       res.write(sseData);
       this.lastActivity.set(userIdStr, Date.now());
       return true;
