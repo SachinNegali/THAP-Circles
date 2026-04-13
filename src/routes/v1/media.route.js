@@ -5,7 +5,7 @@ import auth from '../../middlewares/auth.js';
 
 const router = express.Router();
 
-// Configure multer for in-memory storage (we upload the buffer to S3)
+// Configure multer for in-memory storage (legacy upload)
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
@@ -16,8 +16,16 @@ const upload = multer({
 // All routes require authentication
 router.use(auth);
 
-// Media operations
+// ─── Presigned URL upload flow (new) ─────────────────────────────────────────
+router.post('/upload/init', mediaController.initUpload);
+router.post('/upload/complete', mediaController.completeUpload);
+router.get('/upload/status/:imageId', mediaController.checkStatus);
+router.post('/upload/status/batch', mediaController.batchStatus);
+
+// ─── Legacy multer upload ────────────────────────────────────────────────────
 router.post('/upload', upload.single('file'), mediaController.uploadMedia);
+
+// ─── Download (supports ?variant=thumbnail|optimized|original) ───────────────
 router.get('/:mediaId', mediaController.getMedia);
 
 export default router;
