@@ -124,3 +124,5 @@ dist/
 # .postman_collection
 .postman_collection.json
 .README_POSTMAN.md
+
+firebase-service-account.json
