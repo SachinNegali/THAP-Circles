@@ -58,68 +58,73 @@ export const sendMessage = async (groupId, senderId, content, type = 'text', met
   group.lastActivity = new Date();
   await group.save();
 
-  // Send notifications to all group members except sender
+  // Image messages with pending uploads: defer the message.new broadcast and
+  // notifications until updateMessageImage sees all images complete. Otherwise
+  // recipients get an empty/placeholder push before any image URL is ready.
+  const hasPendingImages =
+    type === 'image' && Array.isArray(finalMetadata.images) && finalMetadata.images.length > 0;
+
+  if (!hasPendingImages) {
+    await broadcastNewMessage(group, message);
+  }
+
+  return message;
+};
+
+/**
+ * Broadcast a message.new SSE event to recipients and create notifications.
+ * Used for normal sends and for deferred delivery once an image message's
+ * uploads finish processing.
+ */
+export const broadcastNewMessage = async (group, message) => {
+  const senderId = message.sender;
   const recipientIds = group.members
     .filter((member) => member.user.toString() !== senderId.toString())
     .map((member) => member.user);
 
-  // Broadcast raw message object via SSE so clients can append directly to
-  // their message array (same shape as GET /messages response items).
-  if (recipientIds.length > 0) {
-    sseManager.sendToUsers(recipientIds, 'message.new', message.toJSON());
-  }
+  if (recipientIds.length === 0) return;
 
-  if (recipientIds.length > 0) {
-    const sender = await User.findById(senderId);
-    const contentPreview = content.length > 50 ? content.substring(0, 50) + '...' : content;
+  sseManager.sendToUsers(recipientIds, 'message.new', message.toJSON());
 
-    // Create notifications for all recipients
-    console.log("bEFORE NOTIF CONTROLLER", 'message.new', `${sender.fName} ${group.name ? "in " + group.name : ""}`, contentPreview, {
+  const sender = await User.findById(senderId);
+  const text = message.content || '';
+  const fallback = message.type === 'image' ? 'Sent an image' : '';
+  const contentPreview = text.length > 50 ? text.substring(0, 50) + '...' : text || fallback;
+
+  const notifications = await notificationService.createNotifications(
+    recipientIds,
+    'message.new',
+    `${sender.fName} in ${group.name}`,
+    contentPreview,
+    {
       groupId: group._id,
       groupName: group.name,
       messageId: message._id,
       senderId: sender._id,
-    })
-    const notifications = await notificationService.createNotifications(
-      recipientIds,
-      'message.new',
-      `${sender.fName} in ${group.name}`,
-      contentPreview,
+    }
+  );
+
+  const deliveredUserIds = notifications
+    .filter((notif) => notif.isDelivered)
+    .map((notif) => notif.user);
+
+  if (deliveredUserIds.length > 0) {
+    for (const userId of deliveredUserIds) {
+      await message.markAsDeliveredTo(userId);
+    }
+
+    await notificationService.createNotification(
+      senderId,
+      'message.delivered',
+      'Message delivered',
+      `Your message was delivered to ${deliveredUserIds.length} member(s)`,
       {
-        groupId: group._id,
-        groupName: group.name,
         messageId: message._id,
-        senderId: sender._id,
+        groupId: group._id,
+        deliveredCount: deliveredUserIds.length,
       }
     );
-
-    // Track delivery: mark message as delivered to users who received notification via SSE
-    const deliveredUserIds = notifications
-      .filter((notif) => notif.isDelivered)
-      .map((notif) => notif.user);
-  // console.log("DELEOVERD USERIDS...", deliveredUserIds)
-    if (deliveredUserIds.length > 0) {
-      for (const userId of deliveredUserIds) {
-        await message.markAsDeliveredTo(userId);
-      }
-
-      // Send delivery receipt to sender
-      // console.log("SENDING RECEIPTS", senderId, 'message.delivered', 'Message delivered', `Your message was delivered to ${deliveredUserIds.length} member(s)`)
-      await notificationService.createNotification(
-        senderId,
-        'message.delivered',
-        'Message delivered',
-        `Your message was delivered to ${deliveredUserIds.length} member(s)`,
-        {
-          messageId: message._id,
-          groupId: group._id,
-          deliveredCount: deliveredUserIds.length,
-        }
-      );
-    }
   }
-
-  return message;
 };
 
 /**
@@ -241,6 +246,8 @@ export const updateMessageImage = async (messageId, imageId, update) => {
     return null;
   }
 
+  const wasComplete = images.length > 0 && images.every((img) => img.status === 'completed');
+
   images[idx] = { ...images[idx], ...update };
 
   const allComplete = images.every((img) => img.status === 'completed');
@@ -268,6 +275,13 @@ export const updateMessageImage = async (messageId, imageId, update) => {
         groupId: message.group.toString(),
         images,
       });
+    }
+
+    // First time all images for this image-message complete: deliver the
+    // deferred message.new SSE event + notifications so recipients only see it
+    // once real image URLs are available.
+    if (allComplete && !wasComplete && message.type === 'image') {
+      await broadcastNewMessage(group, message);
     }
   }
 
