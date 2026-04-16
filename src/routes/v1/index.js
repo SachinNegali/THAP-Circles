@@ -20,6 +20,7 @@ import mediaRoute from './media.route.js';
 import senderKeyRoute from './senderKey.route.js';
 import expenseRoute from './expense.route.js';
 import userRoute from '../../../dist/routes/v1/user.route.js';
+import userProfileRoute from '../../../dist/routes/v1/userProfile.route.js';
 
 const router = express.Router();
 
@@ -52,5 +53,6 @@ router.use('/media', mediaRoute);
 router.use('/groups', senderKeyRoute);
 router.use('/expense', expenseRoute);
 router.use('/user', userRoute);
+router.use('/profile', userProfileRoute);
 
 export default router;
