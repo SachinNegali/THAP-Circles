@@ -1,5 +1,6 @@
 import Trip from '../models/trip.model.js';
 import User from '../models/user.model.js';
+import * as notificationService from './notification.service.js';
 
 /**
  * Create a new trip
@@ -72,8 +73,9 @@ export const createTrip = async (tripData, creatorId) => {
  */
 export const getTripById = async (tripId, userId) => {
   const trip = await Trip.findOne({ _id: tripId, isActive: true })
-    .populate('participants.user', 'fName lName email')
-    .populate('createdBy', 'fName lName email');
+    .populate('participants.user', 'fName lName')
+    .populate('joinRequests.user', 'fName lName')
+    .populate('createdBy', 'fName lName');
 
   if (!trip) {
     throw new Error('Trip not found');
@@ -198,10 +200,72 @@ export const addParticipants = async (tripId, userId, participantIds) => {
         throw error;
       }
     }
+    // Clear any pending join request once the user is a participant
+    await trip.removeJoinRequest(participantId);
   }
 
   await trip.populate([{ path: 'participants.user', select: 'fName lName email' }, { path: 'createdBy', select: 'fName lName email' }]);
   return trip;
+};
+
+/**
+ * Request to join a trip
+ * @param {ObjectId} tripId
+ * @param {ObjectId} userId
+ * @returns {Promise<Trip>}
+ */
+export const requestToJoinTrip = async (tripId, userId) => {
+  const trip = await Trip.findOne({ _id: tripId, isActive: true });
+  console.log("TRIP", trip)
+  console.log("userId", userId, tripId)
+  if (!trip) {
+    throw new Error('Trip not found');
+  }
+
+  if (trip.isCreator(userId)) {
+    throw new Error('You are the creator of this trip');
+  }
+
+  await trip.addJoinRequest(userId);
+
+  const requester = await User.findById(userId).select('fName lName email');
+  const requesterName = `${requester?.fName || ''} ${requester?.lName || ''}`.trim() || 'Someone';
+
+  await notificationService.createNotification(
+    trip.createdBy,
+    'trip.join_request',
+    'New trip join request',
+    `${requesterName} requested to join ${trip.title}`,
+    {
+      tripId: trip._id,
+      tripTitle: trip.title,
+      requesterId: userId,
+      requesterName,
+    }
+  );
+
+  return trip;
+};
+
+/**
+ * Get pending join requests for a trip (creator only)
+ * @param {ObjectId} tripId
+ * @param {ObjectId} userId
+ * @returns {Promise<Array>}
+ */
+export const getJoinRequests = async (tripId, userId) => {
+  const trip = await Trip.findOne({ _id: tripId, isActive: true })
+    .populate('joinRequests.user', 'fName lName email');
+
+  if (!trip) {
+    throw new Error('Trip not found');
+  }
+
+  if (!trip.isCreator(userId)) {
+    throw new Error('Only the creator can view join requests');
+  }
+
+  return trip.joinRequests;
 };
 
 /**

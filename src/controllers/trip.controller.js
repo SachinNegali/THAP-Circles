@@ -160,10 +160,45 @@ export const deleteTrip = async (req, res) => {
 };
 
 /**
+ * Request to join a trip
+ * POST /trips/:id/join
+ */
+export const requestToJoin = async (req, res) => {
+  try {
+    const tripId = req.params.id;
+    const userId = req.user._id;
+
+    await tripService.requestToJoinTrip(tripId, userId);
+
+    res.send({ message: 'Join request sent successfully' });
+  } catch (error) {
+    return handleError(res, error, 'Failed to send join request');
+  }
+};
+
+/**
+ * Get pending join requests for a trip (creator only)
+ * GET /trips/:id/requests
+ */
+export const getJoinRequests = async (req, res) => {
+  try {
+    const tripId = req.params.id;
+    const userId = req.user._id;
+
+    const joinRequests = await tripService.getJoinRequests(tripId, userId);
+
+    res.send({ joinRequests });
+  } catch (error) {
+    return handleError(res, error, 'Failed to get join requests');
+  }
+};
+
+/**
  * Filter/Search trips
  * GET /trips/filter
  */
 export const searchTrips = async (req, res) => {
+  console.log('SEARCH TRIPSSSS...', req.query, "QUERY AND PARAMS..." ,req.params)
   try {
     const { from, to, startDate, endDate } = req.query;
     const page = parseInt(req.query.page) || 1;

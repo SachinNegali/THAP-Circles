@@ -41,6 +41,19 @@ const tripSchema = new mongoose.Schema(
         },
       },
     ],
+    joinRequests: [
+      {
+        user: {
+          type: Types.ObjectId,
+          ref: 'User',
+          required: true,
+        },
+        requestedAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
     startDate: {
       type: Date,
       required: true,
@@ -96,6 +109,8 @@ tripSchema.methods.isParticipant = function (userId) {
  */
 tripSchema.methods.isCreator = function (userId) {
   const creatorId = this.createdBy._id || this.createdBy;
+  console.log("THIS...", this)
+  console.log(creatorId, "creatorId", userId, "userId")
   return creatorId.toString() === userId.toString();
 };
 
@@ -141,6 +156,56 @@ tripSchema.methods.removeParticipant = async function (userId) {
  */
 tripSchema.methods.getParticipantCount = function () {
   return this.participants.length;
+};
+
+/**
+ * Check if user has a pending join request
+ * @param {ObjectId} userId
+ * @returns {boolean}
+ */
+tripSchema.methods.hasJoinRequest = function (userId) {
+  return this.joinRequests.some((request) => {
+    const requesterId = request.user._id || request.user;
+    return requesterId.toString() === userId.toString();
+  });
+};
+
+/**
+ * Add a join request from a user
+ * @param {ObjectId} userId
+ * @returns {Promise<Trip>}
+ */
+tripSchema.methods.addJoinRequest = async function (userId) {
+  if (this.isParticipant(userId)) {
+    throw new Error('User is already a participant');
+  }
+  if (this.hasJoinRequest(userId)) {
+    throw new Error('Join request already exists');
+  }
+
+  this.joinRequests.push({
+    user: userId,
+    requestedAt: new Date(),
+  });
+
+  return this.save();
+};
+
+/**
+ * Remove a join request from a user
+ * @param {ObjectId} userId
+ * @returns {Promise<Trip>}
+ */
+tripSchema.methods.removeJoinRequest = async function (userId) {
+  const index = this.joinRequests.findIndex((r) => {
+    const requesterId = r.user._id || r.user;
+    return requesterId.toString() === userId.toString();
+  });
+
+  if (index === -1) return this;
+
+  this.joinRequests.splice(index, 1);
+  return this.save();
 };
 
 const Trip = mongoose.model('Trip', tripSchema);

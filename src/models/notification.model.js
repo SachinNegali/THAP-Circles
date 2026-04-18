@@ -22,6 +22,7 @@ const notificationSchema = new mongoose.Schema(
         'group.updated',
         'group.deleted',
         'group.member_added',
+        'trip.join_request',
       ],
       required: true,
     },
