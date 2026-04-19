@@ -12,7 +12,7 @@ export const socialLogin = async (req, res) => {
 
     const user = await loginUserWithSocial(email, fName, lName, provider, socialId);
     const tokens = await generateAuthTokens(user);
-    console.log("THESEE TOKENNNS...", tokens)
+
     res.status(200).send({
       user,
       tokens,

@@ -1,6 +1,9 @@
 import admin from 'firebase-admin';
 import { readFileSync } from 'fs';
 import { getDevicesWithPushToken, removePushToken } from './device.service.js';
+import logger from '../config/logger.js';
+
+const log = logger.child({ module: 'firebase' });
 
 const PUSH_ELIGIBLE_TYPES = new Set([
   'message.new',
@@ -20,7 +23,7 @@ class FirebaseService {
     const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
 
     if (!serviceAccountPath) {
-      console.warn('Firebase: FIREBASE_SERVICE_ACCOUNT_PATH not set. Push notifications disabled.');
+      log.warn('FIREBASE_SERVICE_ACCOUNT_PATH not set — push notifications disabled');
       return;
     }
 
@@ -30,10 +33,9 @@ class FirebaseService {
         credential: admin.credential.cert(serviceAccount),
       });
       this.initialized = true;
-      console.log('Firebase: Initialized successfully. Push notifications enabled.');
+      log.info('Initialized successfully — push notifications enabled');
     } catch (error) {
-      console.warn('Firebase: Failed to initialize —', error.message);
-      console.warn('Firebase: Push notifications disabled. App will continue without push.');
+      log.warn({ err: error }, 'Failed to initialize — push notifications disabled');
     }
   }
 
@@ -42,7 +44,6 @@ class FirebaseService {
   }
 
   async sendPushToUser(userId, { type, title, body, data = {} }) {
-    console.log("sendingPushToUser", type, title, body, data)
     if (!this.initialized || !this.isPushEligible(type)) {
       return;
     }
@@ -61,7 +62,6 @@ class FirebaseService {
   }
 
   async sendToDevice(pushToken, platform, { title, body, data, type }) {
-    console.log("this.sendToDevice", {title, body, data, type})
     const stringifiedData = {};
     for (const [key, value] of Object.entries(data)) {
       stringifiedData[key] = typeof value === 'string' ? value : JSON.stringify(value);
@@ -103,10 +103,10 @@ class FirebaseService {
     ];
 
     if (invalidTokenCodes.includes(error.code)) {
-      console.warn(`Firebase: Removing stale push token: ${pushToken.slice(0, 10)}...`);
+      log.warn({ tokenPrefix: pushToken.slice(0, 10) }, 'Removing stale push token');
       await removePushToken(pushToken);
     } else {
-      console.error('Firebase: Push send error:', error.code || error.message);
+      log.error({ err: error, code: error.code }, 'Push send error');
     }
   }
 }

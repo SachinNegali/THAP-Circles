@@ -11,6 +11,9 @@ import {
   refreshAuthTokens,
   logoutUser,
 } from '../services/auth.service.js';
+import logger from '../config/logger.js';
+
+const log = logger.child({ module: 'auth' });
 
 /**
  * POST /auth/google
@@ -39,7 +42,7 @@ export const googleAuth = async (req: Request, res: Response): Promise<void> => 
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Authentication failed';
-    console.error('[AUTH] Google auth failed:', message);
+    log.error({ message }, 'Google auth failed');
 
     if (
       message.includes('Email not verified') ||

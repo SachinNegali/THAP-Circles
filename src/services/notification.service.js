@@ -1,6 +1,9 @@
 import Notification from '../models/notification.model.js';
 import sseManager from './sse.service.js';
 import firebaseService from './firebase.service.js';
+import logger from '../config/logger.js';
+
+const log = logger.child({ module: 'notification' });
 
 /**
  * Create and send a notification to a user
@@ -12,8 +15,6 @@ import firebaseService from './firebase.service.js';
  * @returns {Promise<Notification>}
  */
 export const createNotification = async (userId, type, title, message, data = {}) => {
-  console.log("createNotification serv", type, title, message, data)
-  // Create notification in database
   const notification = await Notification.create({
     user: userId,
     type,
@@ -52,7 +53,7 @@ export const createNotification = async (userId, type, title, message, data = {}
         data: { notificationId: notification._id.toString(), ...notification.data },
       });
     } catch (error) {
-      console.error('FCM push failed:', userId.toString(), error.message);
+      log.error({ err: error, userId: userId.toString() }, 'FCM push failed');
     }
   }
 

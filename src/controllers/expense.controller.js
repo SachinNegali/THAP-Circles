@@ -165,8 +165,6 @@ export const listSettlements = async (req, res) => {
 
 // Nudges
 export const sendNudge = async (req, res) => {
-  console.log("sendNudge controller....", req.params.groupId, req.user._id, req.body.toUserId)
-  console.log("sendNudge controller....!!!!!!",req.body)
   try {
     const nudge = await nudgeService.sendNudge(
       req.params.groupId,
@@ -175,7 +173,6 @@ export const sendNudge = async (req, res) => {
     );
     res.status(201).send({ nudge });
   } catch (error) {
-    console.log("error....", error)
     return handleExpenseError(res, error, 'Failed to send nudge');
   }
 };

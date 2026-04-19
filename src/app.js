@@ -14,6 +14,7 @@
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import requestLogger from './middlewares/requestLogger.middleware.js';
 import routes from './routes/v1/index.js';
 
 const app = express();
@@ -54,6 +55,8 @@ app.use(cors({
  */
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true }));
+
+app.use(requestLogger);
 
 /**
  * Custom NoSQL injection sanitizer (Express 5 compatible).

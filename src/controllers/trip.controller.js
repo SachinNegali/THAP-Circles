@@ -9,9 +9,7 @@ export const createTrip = async (req, res) => {
   try {
     const { title, description, startLocation, destination, stops, startDate, endDate, participantIds } = req.body;
     const creatorId = req.user._id;
-    console.log(req.body,
-      "-------------------------->>>>",startLocation,
-      "----=-==-=-=-=-=-=-==>...", destination);
+
     if (!title) {
       return sendBadRequest(res, 'Trip title is required');
     }
@@ -198,7 +196,6 @@ export const getJoinRequests = async (req, res) => {
  * GET /trips/filter
  */
 export const searchTrips = async (req, res) => {
-  console.log('SEARCH TRIPSSSS...', req.query, "QUERY AND PARAMS..." ,req.params)
   try {
     const { from, to, startDate, endDate } = req.query;
     const page = parseInt(req.query.page) || 1;

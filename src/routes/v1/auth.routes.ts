@@ -34,10 +34,6 @@ const router = Router();
 router.post(
   '/google',
   authLimiter as any,
-  (req, res, next) => {
-    console.log("call here", "req.body", req.body, "req.params", req.params, "req.query", req.query)
-    next()
-  },
   validate(googleAuthSchema),
   googleAuth
 );

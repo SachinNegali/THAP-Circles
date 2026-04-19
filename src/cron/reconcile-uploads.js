@@ -2,6 +2,9 @@ import cron from 'node-cron';
 import { S3Client, HeadObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import MediaUpload from '../models/mediaUpload.model.js';
 import { mediaQueue } from '../queues/media.queue.js';
+import logger from '../config/logger.js';
+
+const log = logger.child({ module: 'cron' });
 
 const s3Client = new S3Client({
   region: process.env.AWS_REGION || 'us-east-1',
@@ -15,7 +18,7 @@ const BUCKET_NAME = process.env.AWS_S3_BUCKET || 'circles-e2ee-media';
 
 // Every 30 minutes: reconcile orphaned uploads
 cron.schedule('*/30 * * * *', async () => {
-  console.log('[reconcile] Checking for orphaned uploads...');
+  log.info('Checking for orphaned uploads');
 
   const cutoff = new Date(Date.now() - 60 * 60 * 1000); // 1 hour old
 
@@ -58,12 +61,12 @@ cron.schedule('*/30 * * * *', async () => {
         );
         markedFailed++;
       } else {
-        console.error(`[reconcile] Error checking ${upload.imageId}:`, err.message);
+        log.error({ err, imageId: upload.imageId }, 'Reconcile check failed');
       }
     }
   }
 
-  console.log(`[reconcile] Reconciled: ${reconciled}, Failed: ${markedFailed}`);
+  log.info({ reconciled, markedFailed }, 'Reconciliation complete');
 });
 
 // Daily at 3 AM: clean up raw uploads older than 7 days
@@ -80,11 +83,11 @@ cron.schedule('0 3 * * *', async () => {
     try {
       await s3Client.send(new DeleteObjectCommand({ Bucket: BUCKET_NAME, Key: upload.s3Key }));
     } catch (err) {
-      console.warn(`[cleanup] Failed to delete ${upload.s3Key}:`, err.message);
+      log.warn({ err, s3Key: upload.s3Key }, 'Failed to delete raw upload');
     }
   }
 
-  console.log(`[cleanup] Deleted ${oldCompleted.length} raw uploads older than 7 days`);
+  log.info({ count: oldCompleted.length }, 'Cleanup: deleted raw uploads older than 7 days');
 });
 
-console.log('[cron] Upload reconciliation and cleanup crons scheduled');
+log.info('Upload reconciliation and cleanup crons scheduled');

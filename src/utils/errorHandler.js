@@ -1,23 +1,10 @@
-/**
- * Simple error handler utility to send consistent error responses
- * Usage in catch blocks:
- * catch (error) {
- *   return handleError(res, error, 'Custom error message', 500);
- * }
- */
+import logger from '../config/logger.js';
 
-/**
- * Send error response
- * @param {Object} res - Express response object
- * @param {Error} error - Error object
- * @param {string} [message] - Custom error message (optional)
- * @param {number} [statusCode] - HTTP status code (default: 500)
- */
+const log = logger.child({ module: 'errorHandler' });
+
 export const handleError = (res, error, message = null, statusCode = 500) => {
-  // Log the error for debugging
-  console.error('Error:', error);
+  log.error({ err: error, statusCode }, message || error.message);
 
-  // Send response
   return res.status(statusCode).send({
     message: message || error.message || 'Internal Server Error',
     ...(process.env.NODE_ENV === 'development' && { stack: error.stack }),

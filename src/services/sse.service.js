@@ -1,8 +1,6 @@
-/**
- * SSE Connection Manager Service
- * Manages Server-Sent Events connections for real-time notifications
- * Singleton pattern for single-server deployment
- */
+import logger from '../config/logger.js';
+
+const log = logger.child({ module: 'sse' });
 
 class SSEConnectionManager {
   constructor() {
@@ -40,7 +38,7 @@ class SSEConnectionManager {
     this.connections.set(userIdStr, res);
     this.lastActivity.set(userIdStr, Date.now());
 
-    console.log(`SSE: User ${userIdStr} connected. Total connections: ${this.connections.size}`);
+    log.info({ userId: userIdStr, totalConnections: this.connections.size }, 'User connected');
   }
 
   /**
@@ -53,7 +51,7 @@ class SSEConnectionManager {
     if (this.connections.has(userIdStr)) {
       this.connections.delete(userIdStr);
       this.lastActivity.delete(userIdStr);
-      console.log(`SSE: User ${userIdStr} disconnected. Total connections: ${this.connections.size}`);
+      log.info({ userId: userIdStr, totalConnections: this.connections.size }, 'User disconnected');
     }
   }
 
@@ -76,20 +74,17 @@ class SSEConnectionManager {
   sendToUser(userId, event, data) {
     const userIdStr = userId.toString();
     const res = this.connections.get(userIdStr);
-    // console.log("RES", res)
-    // console.log("connectionnn", this.connections.get(userIdStr))
     if (!res) {
       return false;
     }
 
     try {
       const sseData = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-      // console.log("RHIS DATA DATA", "--------------", sseData, "\n============",data)
       res.write(sseData);
       this.lastActivity.set(userIdStr, Date.now());
       return true;
     } catch (error) {
-      console.error(`SSE: Error sending to user ${userIdStr}:`, error.message);
+      log.error({ err: error, userId: userIdStr }, 'Error sending event');
       this.removeConnection(userIdStr);
       return false;
     }
@@ -153,7 +148,7 @@ class SSEConnectionManager {
 
     this.lastActivity.forEach((timestamp, userId) => {
       if (now - timestamp > staleThreshold) {
-        console.log(`SSE: Cleaning up stale connection for user ${userId}`);
+        log.debug({ userId }, 'Cleaning up stale connection');
         this.removeConnection(userId);
       }
     });

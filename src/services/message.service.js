@@ -3,6 +3,9 @@ import Group from '../models/group.model.js';
 import User from '../models/user.model.js';
 import * as notificationService from './notification.service.js';
 import sseManager from './sse.service.js';
+import logger from '../config/logger.js';
+
+const log = logger.child({ module: 'message' });
 
 /**
  * Send a message to a group
@@ -235,14 +238,14 @@ export const deleteMessage = async (messageId, userId) => {
 export const updateMessageImage = async (messageId, imageId, update) => {
   const message = await Message.findById(messageId);
   if (!message) {
-    console.warn(`[updateMessageImage] Message ${messageId} not found`);
+    log.warn({ messageId }, 'Message not found for image update');
     return null;
   }
 
   const images = Array.isArray(message.metadata?.images) ? message.metadata.images : [];
   const idx = images.findIndex((img) => img.imageId === imageId);
   if (idx === -1) {
-    console.warn(`[updateMessageImage] imageId ${imageId} not found on message ${messageId}`);
+    log.warn({ imageId, messageId }, 'imageId not found on message');
     return null;
   }
 

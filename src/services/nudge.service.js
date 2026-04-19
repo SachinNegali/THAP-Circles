@@ -7,7 +7,6 @@ import { getBalances } from './balance.service.js';
 const NUDGE_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
 export const sendNudge = async (groupId, fromUserId, toUserId) => {
-  console.log("sendNudge....", groupId, fromUserId, toUserId)
   if (!toUserId) throw new ExpenseError('INVALID_NUDGE', 'toUserId is required', 422);
 
   const balances = await getBalances(groupId);

@@ -109,8 +109,6 @@ tripSchema.methods.isParticipant = function (userId) {
  */
 tripSchema.methods.isCreator = function (userId) {
   const creatorId = this.createdBy._id || this.createdBy;
-  console.log("THIS...", this)
-  console.log(creatorId, "creatorId", userId, "userId")
   return creatorId.toString() === userId.toString();
 };
 

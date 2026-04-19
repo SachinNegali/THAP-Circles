@@ -24,22 +24,13 @@ import userProfileRoute from '../../../dist/routes/v1/userProfile.route.js';
 
 const router = express.Router();
 
-console.log("call here")
 router.get('/status', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date() });
 });
 
 router.use('/auth', authRoute.default || authRoute);
 router.use('/group', groupRoute);
-router.use('/message',
-  (req, res, next) => {
-    console.log("Message call",
-      req.body, "-------------------------->>>>",
-      req.params, "qurtyyyyyyyyyyyy",
-      req.query)
-    next();
-    },
-  messageRoute);
+router.use('/message', messageRoute);
 router.use('/trip', tripRoute);
 router.use('/event', eventRoute);
 router.use('/sse', sseRoute);

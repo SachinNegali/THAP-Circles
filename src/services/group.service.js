@@ -112,7 +112,6 @@ export const createDM = async (creatorId, recipientId) => {
  * @returns {Promise<Group>}
  */
 export const getGroupById = async (groupId, userId) => {
-  console.log("illa???", groupId, userId)
   const group = await Group.findOne({ _id: groupId, isActive: true }).populate(
     'members.user',
     'fName lName'
@@ -120,8 +119,7 @@ export const getGroupById = async (groupId, userId) => {
   if (!group) {
     throw new Error('Group not found');
   }
-  const isMember = group.isMember(userId)
-  console.log("isMember", isMember)
+  const isMember = group.isMember(userId);
   if (!isMember) {
     throw new Error('You are not a member of this group');
   }

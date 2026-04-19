@@ -3,6 +3,7 @@ dotenv.config();
 
 import app from './src/app.js';
 import connectDB from './src/config/db.js';
+import logger from './src/config/logger.js';
 
 // Image processing worker & reconciliation cron (same-process mode)
 import './src/workers/media.worker.js';
@@ -14,5 +15,5 @@ connectDB();
 const PORT = process.env.PORT || 8081;
 
 app.listen(PORT, () => {
-  console.log(`Server running at... http://localhost:${PORT}/`);
+  logger.info({ port: PORT }, 'Server started');
 });

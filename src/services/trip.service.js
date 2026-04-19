@@ -61,7 +61,7 @@ export const createTrip = async (tripData, creatorId) => {
   const populatedTrip = await Trip.findById(tripDoc._id)
     .populate('participants.user', 'fName lName email')
     .populate('createdBy', 'fName lName email');
-    console.log("populatedTrip", populatedTrip)
+
   return populatedTrip;
 };
 
@@ -216,8 +216,7 @@ export const addParticipants = async (tripId, userId, participantIds) => {
  */
 export const requestToJoinTrip = async (tripId, userId) => {
   const trip = await Trip.findOne({ _id: tripId, isActive: true });
-  console.log("TRIP", trip)
-  console.log("userId", userId, tripId)
+
   if (!trip) {
     throw new Error('Trip not found');
   }

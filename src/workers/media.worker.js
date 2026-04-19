@@ -4,6 +4,9 @@ import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3
 import MediaUpload from '../models/mediaUpload.model.js';
 import sseManager from '../services/sse.service.js';
 import { updateMessageImage } from '../services/message.service.js';
+import logger from '../config/logger.js';
+
+const log = logger.child({ module: 'media-worker' });
 
 const REDIS_CONNECTION = {
   host: process.env.REDIS_HOST || '127.0.0.1',
@@ -147,7 +150,7 @@ const mediaWorker = new Worker(
 // On final failure, mark the MediaUpload + Message image entry as failed and
 // broadcast the status so the chat UI can show a retry/error state.
 mediaWorker.on('failed', async (job, err) => {
-  console.error(`[media-worker] Job ${job.id} failed (attempt ${job.attemptsMade}/${job.opts.attempts}):`, err.message);
+  log.error({ jobId: job.id, attempt: job.attemptsMade, maxAttempts: job.opts.attempts, err }, 'Job failed');
 
   if (job.attemptsMade >= job.opts.attempts) {
     const { imageId, messageId, chatId, userId } = job.data;
@@ -158,7 +161,7 @@ mediaWorker.on('failed', async (job, err) => {
         imageId, messageId, chatId, status: 'failed',
       });
     } catch (e) {
-      console.error('[media-worker] error handling final failure:', e);
+      log.error({ err: e, imageId: job.data.imageId }, 'Error handling final failure');
     }
   }
 });
