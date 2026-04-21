@@ -175,6 +175,27 @@ export const requestToJoin = async (req, res) => {
 };
 
 /**
+ * Accept a join request for a trip (creator only)
+ * POST /trips/:id/requests/:userId/accept
+ */
+export const acceptJoinRequest = async (req, res) => {
+  try {
+    const tripId = req.params.id;
+    const userId = req.user._id;
+    const requesterId = req.params.userId;
+
+    const trip = await tripService.acceptJoinRequest(tripId, userId, requesterId);
+
+    res.send({
+      message: 'Join request accepted',
+      trip,
+    });
+  } catch (error) {
+    return handleError(res, error, 'Failed to accept join request');
+  }
+};
+
+/**
  * Get pending join requests for a trip (creator only)
  * GET /trips/:id/requests
  */

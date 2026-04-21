@@ -22,5 +22,6 @@ router.delete('/:id/participants/:userId', tripController.removeParticipant);
 // Join request routes
 router.post('/:id/join', tripController.requestToJoin);
 router.get('/:id/requests', tripController.getJoinRequests);
+router.post('/:id/requests/:userId/accept', tripController.acceptJoinRequest);
 
 export default router;

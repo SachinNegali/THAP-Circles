@@ -11,6 +11,8 @@ const PUSH_ELIGIBLE_TYPES = new Set([
   'group.member_removed',
   'group.role_updated',
   'group.deleted',
+  'trip.join_request',
+  'trip.join_accepted',
 ]);
 
 class FirebaseService {

@@ -247,6 +247,50 @@ export const requestToJoinTrip = async (tripId, userId) => {
 };
 
 /**
+ * Accept a join request for a trip (creator only)
+ * @param {ObjectId} tripId
+ * @param {ObjectId} creatorId
+ * @param {ObjectId} requesterId
+ * @returns {Promise<Trip>}
+ */
+export const acceptJoinRequest = async (tripId, creatorId, requesterId) => {
+  const trip = await Trip.findOne({ _id: tripId, isActive: true });
+
+  if (!trip) {
+    throw new Error('Trip not found');
+  }
+
+  if (!trip.isCreator(creatorId)) {
+    throw new Error('Only the creator can accept join requests');
+  }
+
+  if (!trip.hasJoinRequest(requesterId)) {
+    throw new Error('No pending join request from this user');
+  }
+
+  await trip.addParticipant(requesterId);
+  await trip.removeJoinRequest(requesterId);
+
+  const creator = await User.findById(creatorId).select('fName lName');
+  const creatorName = `${creator?.fName || ''} ${creator?.lName || ''}`.trim() || 'The creator';
+
+  await notificationService.createNotification(
+    requesterId,
+    'trip.join_accepted',
+    'Join request accepted',
+    `${creatorName} accepted your request to join ${trip.title}`,
+    {
+      tripId: trip._id,
+      tripTitle: trip.title,
+      creatorId,
+    }
+  );
+
+  await trip.populate([{ path: 'participants.user', select: 'fName lName email' }, { path: 'createdBy', select: 'fName lName email' }]);
+  return trip;
+};
+
+/**
  * Get pending join requests for a trip (creator only)
  * @param {ObjectId} tripId
  * @param {ObjectId} userId
