@@ -15,8 +15,60 @@ const PORT = parseInt(process.env.TRACKING_SERVER_PORT || '9001', 10);
 // In-memory routing: Map<groupId, Set<WebSocket>>
 const groups = new Map();
 
-// User metadata: WeakMap<WebSocket, {userId, groupId}>
+// User metadata: WeakMap<WebSocket, {userId, groupId, numericId}>
 const userMetadata = new WeakMap();
+
+// Group member roster: Map<groupId, Map<numericId, userId(ObjectId)>>
+const groupRosters = new Map();
+
+// Last broadcast position per user: Map<"groupId:userId", {lat, lng}>
+const lastPositions = new Map();
+const MIN_DISTANCE_METERS = 15;
+
+/** Convert MongoDB ObjectId → numeric uint32 (same logic as client-side). */
+function objectIdToNumericId(objectId) {
+  return parseInt(objectId.slice(-8), 16);
+}
+
+function haversineDistance(lat1, lng1, lat2, lng2) {
+  const R = 6_371_000; // Earth radius in meters
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function parseLatLng(buffer) {
+  try {
+    const view = new DataView(
+      buffer instanceof ArrayBuffer ? buffer : buffer.buffer ?? new Uint8Array(buffer).buffer
+    );
+    const lat = view.getFloat64(4, true);
+    const lng = view.getFloat64(12, true);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
+  } catch (_) {}
+  return null;
+}
+
+function shouldBroadcast(groupId, userId, buffer) {
+  const coords = parseLatLng(buffer);
+  if (!coords) return true; // can't parse — let it through
+  const key = `${groupId}:${userId}`;
+  const last = lastPositions.get(key);
+  if (!last) {
+    lastPositions.set(key, coords);
+    return true; // first update — always broadcast
+  }
+  const dist = haversineDistance(last.lat, last.lng, coords.lat, coords.lng);
+  if (dist >= MIN_DISTANCE_METERS) {
+    lastPositions.set(key, coords);
+    return true;
+  }
+  return false;
+}
 
 // ─── Long-Polling Infrastructure ───────────────────────────────────────────────
 // Per-group polling state:
@@ -124,29 +176,37 @@ function verifyToken(token) {
 }
 
 /**
- * Add user to a group
- * @param {string} groupId - Group identifier
- * @param {WebSocket} ws - WebSocket connection
+ * Add user to a group and update the roster
  */
-function addToGroup(groupId, ws) {
+function addToGroup(groupId, ws, userId) {
   if (!groups.has(groupId)) {
     groups.set(groupId, new Set());
   }
   groups.get(groupId).add(ws);
+
+  if (!groupRosters.has(groupId)) {
+    groupRosters.set(groupId, new Map());
+  }
+  const numericId = objectIdToNumericId(userId);
+  groupRosters.get(groupId).set(numericId, userId);
 }
 
 /**
- * Remove user from a group
- * @param {string} groupId - Group identifier
- * @param {WebSocket} ws - WebSocket connection
+ * Remove user from a group and update the roster
  */
-function removeFromGroup(groupId, ws) {
+function removeFromGroup(groupId, ws, userId) {
   const group = groups.get(groupId);
   if (!group) return;
-  
+
   group.delete(ws);
-  
-  // Clean up empty groups
+
+  const roster = groupRosters.get(groupId);
+  if (roster) {
+    const numericId = objectIdToNumericId(userId);
+    roster.delete(numericId);
+    if (roster.size === 0) groupRosters.delete(groupId);
+  }
+
   if (group.size === 0) {
     groups.delete(groupId);
     console.log(`[CLEANUP] Deleted empty group: ${groupId}`);
@@ -247,25 +307,53 @@ app.ws('/*', {
   /* WebSocket open handler */
   open: (ws) => {
     const { userId, groupId } = ws.getUserData();
-    
+    const numericId = objectIdToNumericId(userId);
+
     // Store metadata
-    userMetadata.set(ws, { userId, groupId });
-    
-    // Add to group
-    addToGroup(groupId, ws);
-    
+    userMetadata.set(ws, { userId, groupId, numericId });
+
+    // Add to group (updates roster)
+    addToGroup(groupId, ws, userId);
+
     const groupSize = groups.get(groupId)?.size || 0;
-    console.log(`[CONNECT] User ${userId} joined group ${groupId} (${groupSize} members)`);
-    
-    // Send welcome message (optional, can be removed for pure binary protocol)
+    console.log(`[CONNECT] User ${userId} (num:${numericId}) joined group ${groupId} (${groupSize} members)`);
+
+    // Build roster snapshot: { numericId: objectId, ... }
+    const roster = {};
+    const rosterMap = groupRosters.get(groupId);
+    if (rosterMap) {
+      for (const [nid, oid] of rosterMap) {
+        roster[nid] = oid;
+      }
+    }
+
+    // Send welcome with roster to the connecting client
     const welcomeMsg = JSON.stringify({
       type: 'welcome',
       userId,
       groupId,
       groupSize,
+      roster,
       timestamp: Date.now()
     });
-    ws.send(welcomeMsg, false, true); // isBinary=false, compress=true
+    ws.send(welcomeMsg, false, true);
+
+    // Broadcast peer_joined to all other members
+    const joinMsg = JSON.stringify({
+      type: 'peer_joined',
+      userId,
+      numericId,
+      groupSize,
+      timestamp: Date.now()
+    });
+    const group = groups.get(groupId);
+    if (group) {
+      for (const peer of group) {
+        if (peer !== ws) {
+          peer.send(joinMsg, false, true);
+        }
+      }
+    }
   },
   
   /* WebSocket message handler - zero-copy binary relay */
@@ -276,17 +364,12 @@ app.ws('/*', {
     const { userId, groupId } = metadata;
     
     if (isBinary) {
-      // Zero-copy forwarding: relay the binary buffer directly
-      const broadcastCount = broadcastToGroup(groupId, ws, message);
-      
-      // Optional: Log for debugging (remove in production for max performance)
-      if (message.byteLength === 40) {
-        // Expected 40-byte location update
-        // Format: [uint32: userId, float64: lat, float64: lng, uint16: speed, uint16: bearing, uint8: status]
-        console.log(`[RELAY] User ${userId} → ${broadcastCount} peers in group ${groupId} (${message.byteLength} bytes)`);
-      } else {
-        console.log(`[RELAY] User ${userId} → ${broadcastCount} peers in group ${groupId} (${message.byteLength} bytes, unexpected size)`);
+      if (!shouldBroadcast(groupId, userId, message)) {
+        return; // moved less than 5 m — skip
       }
+
+      const broadcastCount = broadcastToGroup(groupId, ws, message);
+      console.log(`[RELAY] User ${userId} → ${broadcastCount} peers in group ${groupId} (${message.byteLength} bytes)`);
     } else {
       // Handle text messages (optional, for control messages)
       const text = Buffer.from(message).toString('utf8');
@@ -298,16 +381,30 @@ app.ws('/*', {
   close: (ws, code, message) => {
     const metadata = userMetadata.get(ws);
     if (!metadata) return;
-    
-    const { userId, groupId } = metadata;
-    
-    // Remove from group
-    removeFromGroup(groupId, ws);
-    
+
+    const { userId, groupId, numericId } = metadata;
+
+    removeFromGroup(groupId, ws, userId);
+    lastPositions.delete(`${groupId}:${userId}`);
+
     const groupSize = groups.get(groupId)?.size || 0;
-    console.log(`[DISCONNECT] User ${userId} left group ${groupId} (${groupSize} members remaining)`);
-    
-    // Clean up metadata
+    console.log(`[DISCONNECT] User ${userId} (num:${numericId}) left group ${groupId} (${groupSize} remaining)`);
+
+    // Broadcast peer_left to remaining members
+    const leftMsg = JSON.stringify({
+      type: 'peer_left',
+      userId,
+      numericId,
+      groupSize,
+      timestamp: Date.now()
+    });
+    const group = groups.get(groupId);
+    if (group) {
+      for (const peer of group) {
+        peer.send(leftMsg, false, true);
+      }
+    }
+
     userMetadata.delete(ws);
   },
   
@@ -370,15 +467,23 @@ app.post('/poll/send', (res, req) => {
       }
 
       const userId = decoded.userId || decoded.sub;
+
+      const binaryBuf = Buffer.from(data, 'base64');
+      if (!shouldBroadcast(groupId, userId, binaryBuf)) {
+        res.cork(() => {
+          res.writeStatus('200 OK');
+          res.writeHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ ok: true, skipped: true }));
+        });
+        return;
+      }
+
       console.log(`[POLL-SEND] User ${userId} → group ${groupId}`);
 
-      // 1. Push to polling buffer (also notifies waiting poll subscribers)
       pushPollingMessage(groupId, userId, data);
 
-      // 2. Broadcast to WebSocket peers in the same group
       const group = groups.get(groupId);
       if (group) {
-        const binaryBuf = Buffer.from(data, 'base64');
         for (const ws of group) {
           ws.send(binaryBuf, true, false);
         }
