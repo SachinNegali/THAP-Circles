@@ -11,7 +11,7 @@ import {
   refreshAuthTokens,
   logoutUser,
 } from '../services/auth.service.js';
-import logger from '../config/logger.js';
+import logger from '../../src/config/logger.js';
 
 const log = logger.child({ module: 'auth' });
 
