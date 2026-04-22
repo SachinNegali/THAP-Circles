@@ -371,9 +371,30 @@ app.ws('/*', {
       const broadcastCount = broadcastToGroup(groupId, ws, message);
       console.log(`[RELAY] User ${userId} → ${broadcastCount} peers in group ${groupId} (${message.byteLength} bytes)`);
     } else {
-      // Handle text messages (optional, for control messages)
       const text = Buffer.from(message).toString('utf8');
-      console.log(`[TEXT] User ${userId} in group ${groupId}: ${text}`);
+      try {
+        const parsed = JSON.parse(text);
+        if (parsed.type === 'quick_action') {
+          const relay = JSON.stringify({
+            type: 'quick_action',
+            actionId: parsed.actionId,
+            label: parsed.label,
+            priority: parsed.priority,
+            senderUserId: userId,
+            senderName: parsed.senderName || 'A rider',
+            timestamp: Date.now(),
+          });
+          const group = groups.get(groupId);
+          if (group) {
+            for (const peer of group) {
+              if (peer !== ws) peer.send(relay, false, true);
+            }
+          }
+          console.log(`[ACTION] User ${userId} sent "${parsed.actionId}" to group ${groupId}`);
+        }
+      } catch (_) {
+        console.log(`[TEXT] User ${userId} in group ${groupId}: ${text}`);
+      }
     }
   },
   
