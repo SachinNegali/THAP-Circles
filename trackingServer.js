@@ -9,6 +9,23 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 dotenv.config({ path: join(__dirname, '.env') });
 
+import connectDB from './src/config/db.js';
+import {
+  mirrorRoster,
+  mirrorRemoveRoster,
+  mirrorFrame,
+  mirrorPosition,
+  hydrateGroup,
+} from './src/services/trackingState.service.js';
+import {
+  markDirty,
+  clearDirty,
+  startFlusher,
+} from './src/services/trackingSnapshot.service.js';
+
+// Connect to Mongo so the snapshot flusher can insert trail docs.
+connectDB();
+
 const JWT_SECRET = process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET || 'secret-key-change-me';
 const PORT = parseInt(process.env.TRACKING_SERVER_PORT || '9001', 10);
 
@@ -23,6 +40,9 @@ const groupRosters = new Map();
 
 // Last broadcast position per user: Map<"groupId:userId", {lat, lng}>
 const lastPositions = new Map();
+// Last raw 40-byte binary frame per user: Map<"groupId:userId", Buffer>
+// Used to replay the most recent known position to newly-joining clients.
+const lastFrames = new Map();
 const MIN_DISTANCE_METERS = 15;
 
 /** Convert MongoDB ObjectId → numeric uint32 (same logic as client-side). */
@@ -58,13 +78,16 @@ function shouldBroadcast(groupId, userId, buffer) {
   if (!coords) return true; // can't parse — let it through
   const key = `${groupId}:${userId}`;
   const last = lastPositions.get(key);
+  const now = Date.now();
   if (!last) {
-    lastPositions.set(key, coords);
+    lastPositions.set(key, { ...coords, ts: now });
+    mirrorPosition(groupId, userId, coords.lat, coords.lng);
     return true; // first update — always broadcast
   }
   const dist = haversineDistance(last.lat, last.lng, coords.lat, coords.lng);
   if (dist >= MIN_DISTANCE_METERS) {
-    lastPositions.set(key, coords);
+    lastPositions.set(key, { ...coords, ts: now });
+    mirrorPosition(groupId, userId, coords.lat, coords.lng);
     return true;
   }
   return false;
@@ -189,6 +212,7 @@ function addToGroup(groupId, ws, userId) {
   }
   const numericId = objectIdToNumericId(userId);
   groupRosters.get(groupId).set(numericId, userId);
+  mirrorRoster(groupId, numericId, userId);
 }
 
 /**
@@ -204,6 +228,7 @@ function removeFromGroup(groupId, ws, userId) {
   if (roster) {
     const numericId = objectIdToNumericId(userId);
     roster.delete(numericId);
+    mirrorRemoveRoster(groupId, numericId, userId);
     if (roster.size === 0) groupRosters.delete(groupId);
   }
 
@@ -223,23 +248,31 @@ function removeFromGroup(groupId, ws, userId) {
 function broadcastToGroup(groupId, senderWs, message) {
   const group = groups.get(groupId);
   if (!group) return;
-  
+
   let broadcastCount = 0;
-  
-  // Zero-copy forwarding: send the same ArrayBuffer to all peers
-  // Note: In uWebSockets.js, all WebSockets in the Set are already open
+
   for (const ws of group) {
     if (ws !== senderWs) {
-      ws.send(message, true, false); // isBinary=true, compress=false
+      ws.send(message, true, false);
       broadcastCount++;
     }
   }
-  
-  // ── Interop: also push into the polling buffer so long-poll clients see WS updates ──
+
   const senderId = senderWs ? (userMetadata.get(senderWs)?.userId || 'ws-unknown') : 'poll';
-  const base64 = Buffer.from(message).toString('base64');
+
+  // Cache the latest frame so new joiners can be given a snapshot.
+  const frameBuf = Buffer.from(message);
+  lastFrames.set(`${groupId}:${senderId}`, frameBuf);
+
+  // Mirror to Redis (crash survival) and flag for next DB flush.
+  mirrorFrame(groupId, senderId, frameBuf);
+  if (senderId !== 'ws-unknown' && senderId !== 'poll') {
+    markDirty(groupId, senderId);
+  }
+
+  const base64 = frameBuf.toString('base64');
   pushPollingMessage(groupId, senderId, base64);
-  
+
   return broadcastCount;
 }
 
@@ -305,12 +338,32 @@ app.ws('/*', {
   },
   
   /* WebSocket open handler */
-  open: (ws) => {
+  open: async (ws) => {
     const { userId, groupId } = ws.getUserData();
     const numericId = objectIdToNumericId(userId);
 
     // Store metadata
     userMetadata.set(ws, { userId, groupId, numericId });
+
+    // Crash recovery: if this process hasn't seen this group yet (cold start
+    // or fresh after a restart), rebuild roster/frames/positions from Redis
+    // before we reply with the welcome snapshot.
+    if (!groupRosters.has(groupId)) {
+      const hydrated = await hydrateGroup(groupId);
+      if (hydrated) {
+        groupRosters.set(groupId, hydrated.roster);
+        for (const [uid, buf] of hydrated.frames) {
+          lastFrames.set(`${groupId}:${uid}`, buf);
+        }
+        for (const [uid, pos] of hydrated.positions) {
+          lastPositions.set(`${groupId}:${uid}`, { ...pos, ts: Date.now() });
+        }
+        console.log(`[HYDRATE] group ${groupId}: restored ${hydrated.roster.size} roster / ${hydrated.frames.size} frames from Redis`);
+      }
+    }
+
+    // The socket may have closed during the await. Bail if so.
+    if (!userMetadata.get(ws)) return;
 
     // Add to group (updates roster)
     addToGroup(groupId, ws, userId);
@@ -337,6 +390,16 @@ app.ws('/*', {
       timestamp: Date.now()
     });
     ws.send(welcomeMsg, false, true);
+
+    // Replay last-known positions of existing members so the new joiner
+    // sees everyone immediately instead of waiting for next broadcasts.
+    if (rosterMap) {
+      for (const [, oid] of rosterMap) {
+        if (oid === userId) continue;
+        const cached = lastFrames.get(`${groupId}:${oid}`);
+        if (cached) ws.send(cached, true, false);
+      }
+    }
 
     // Broadcast peer_joined to all other members
     const joinMsg = JSON.stringify({
@@ -407,6 +470,8 @@ app.ws('/*', {
 
     removeFromGroup(groupId, ws, userId);
     lastPositions.delete(`${groupId}:${userId}`);
+    lastFrames.delete(`${groupId}:${userId}`);
+    clearDirty(groupId, userId);
 
     const groupSize = groups.get(groupId)?.size || 0;
     console.log(`[DISCONNECT] User ${userId} (num:${numericId}) left group ${groupId} (${groupSize} remaining)`);
@@ -501,6 +566,9 @@ app.post('/poll/send', (res, req) => {
 
       console.log(`[POLL-SEND] User ${userId} → group ${groupId}`);
 
+      lastFrames.set(`${groupId}:${userId}`, Buffer.from(binaryBuf));
+      mirrorFrame(groupId, userId, binaryBuf);
+      markDirty(groupId, userId);
       pushPollingMessage(groupId, userId, data);
 
       const group = groups.get(groupId);
@@ -688,6 +756,16 @@ app.get('/health', (res, req) => {
   }));
 });
 
+// Position lookup used by the flusher to read current state without reaching
+// into this file's Maps from outside.
+function getPositionForFlush(groupId, userId) {
+  const pos = lastPositions.get(`${groupId}:${userId}`);
+  if (!pos) return null;
+  return { lat: pos.lat, lng: pos.lng, ts: pos.ts || Date.now() };
+}
+
+const stopFlusher = startFlusher(getPositionForFlush);
+
 // Start server
 app.listen(PORT, (token) => {
   if (token) {
@@ -702,11 +780,19 @@ app.listen(PORT, (token) => {
 });
 
 // Graceful shutdown
-process.on('SIGINT', () => {
-  console.log('\n🛑 Shutting down tracking server...');
-  
+async function shutdown(signal) {
+  console.log(`\n🛑 Received ${signal}, shutting down tracking server...`);
+
+  // Stop flusher and drain any remaining dirty positions into Mongo so
+  // nothing in-flight is lost on a clean shutdown.
+  try {
+    await stopFlusher();
+  } catch (err) {
+    console.error('Flusher drain error:', err);
+  }
+
   // Close all WebSocket connections
-  for (const [groupId, group] of groups.entries()) {
+  for (const [, group] of groups.entries()) {
     for (const ws of group) {
       ws.close();
     }
@@ -729,9 +815,7 @@ process.on('SIGINT', () => {
 
   console.log('✅ All connections closed');
   process.exit(0);
-});
+}
 
-process.on('SIGTERM', () => {
-  console.log('\n🛑 Received SIGTERM, shutting down...');
-  process.exit(0);
-});
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
