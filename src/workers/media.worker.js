@@ -1,10 +1,15 @@
 import { Worker } from 'bullmq';
 import sharp from 'sharp';
 import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import MediaUpload from '../models/mediaUpload.model.js';
 import sseManager from '../services/sse.service.js';
 import { updateMessageImage } from '../services/message.service.js';
 import logger from '../config/logger.js';
+
+// Presigned URL lifetime — AWS max for SigV4 is 7 days. Clients should
+// regenerate (via getMessages or the /media/:id?variant=... endpoint) after this.
+const PRESIGNED_URL_TTL = 7 * 24 * 60 * 60;
 
 const log = logger.child({ module: 'media-worker' });
 
@@ -96,10 +101,22 @@ const mediaWorker = new Worker(
       })),
     ]);
 
-    // 6. Build URLs and mark completed
-    const baseUrl = process.env.API_BASE_URL || '';
-    const thumbnailUrl = `${baseUrl}/v1/media/${imageId}?variant=thumbnail`;
-    const optimizedUrl = `${baseUrl}/v1/media/${imageId}?variant=optimized`;
+    // 6. Build publicly-accessible presigned URLs and mark completed.
+    //    Presigned URLs work from any network — no dependency on API_BASE_URL
+    //    being externally reachable. They expire after PRESIGNED_URL_TTL,
+    //    at which point getMessages re-signs them on read.
+    const [thumbnailUrl, optimizedUrl] = await Promise.all([
+      getSignedUrl(
+        s3Client,
+        new GetObjectCommand({ Bucket: BUCKET_NAME, Key: thumbnailKey }),
+        { expiresIn: PRESIGNED_URL_TTL }
+      ),
+      getSignedUrl(
+        s3Client,
+        new GetObjectCommand({ Bucket: BUCKET_NAME, Key: optimizedKey }),
+        { expiresIn: PRESIGNED_URL_TTL }
+      ),
+    ]);
 
     await MediaUpload.updateOne(
       { imageId },

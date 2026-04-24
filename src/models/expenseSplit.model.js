@@ -19,6 +19,7 @@ const expenseSplitSchema = new mongoose.Schema(
 expenseSplitSchema.index({ cycle: 1, user: 1 });
 expenseSplitSchema.index({ cycle: 1, status: 1 });
 
-const ExpenseSplit = mongoose.model('ExpenseSplit', expenseSplitSchema);
+// Reuse existing model if already registered (avoids conflict with TS version)
+const ExpenseSplit = mongoose.models.ExpenseSplit || mongoose.model('ExpenseSplit', expenseSplitSchema);
 
 export default ExpenseSplit;

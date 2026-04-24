@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { Types } from 'mongoose';
 
 const BLOOD_GROUPS = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'] as const;
 
@@ -47,3 +48,15 @@ export const updateEmergencyContactSchema = emergencyContactSchema.partial().ref
   (data) => Object.keys(data).length > 0,
   { message: 'At least one field must be provided' }
 );
+
+/**
+ * Validates :contactId path param as a 24-char hex ObjectId so malformed
+ * ids fail fast with 400 instead of reaching Mongoose and throwing
+ * CastError from deep inside the query.
+ */
+export const contactIdParamsSchema = z.object({
+  contactId: z
+    .string()
+    .trim()
+    .refine((v) => Types.ObjectId.isValid(v), { message: 'Invalid contactId' }),
+});

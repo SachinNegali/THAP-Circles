@@ -126,6 +126,7 @@ messageSchema.methods.getDeliveryStatus = function (totalMembers) {
   };
 };
 
-const Message = mongoose.model('Message', messageSchema);
+// Reuse existing model if already registered (avoids conflict with TS version)
+const Message = mongoose.models.Message || mongoose.model('Message', messageSchema);
 
 export default Message;

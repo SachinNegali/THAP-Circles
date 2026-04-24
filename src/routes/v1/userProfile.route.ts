@@ -12,6 +12,7 @@ import {
   updateProfileSchema,
   addEmergencyContactSchema,
   updateEmergencyContactSchema,
+  contactIdParamsSchema,
 } from '../../validations/userProfile.validation.js';
 
 const router = Router();
@@ -28,9 +29,15 @@ router.post(
 router.patch(
   '/emergency-contacts/:contactId',
   authMiddleware,
+  validate(contactIdParamsSchema, 'params'),
   validate(updateEmergencyContactSchema),
   updateEmergencyContact
 );
-router.delete('/emergency-contacts/:contactId', authMiddleware, deleteEmergencyContact);
+router.delete(
+  '/emergency-contacts/:contactId',
+  authMiddleware,
+  validate(contactIdParamsSchema, 'params'),
+  deleteEmergencyContact
+);
 
 export default router;

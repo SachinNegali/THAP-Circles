@@ -23,6 +23,7 @@ const mediaUploadSchema = new mongoose.Schema({
 mediaUploadSchema.index({ messageId: 1, status: 1 });
 mediaUploadSchema.index({ status: 1, createdAt: 1 });
 
-const MediaUpload = mongoose.model('MediaUpload', mediaUploadSchema);
+// Reuse existing model if already registered (avoids conflict with TS version)
+const MediaUpload = mongoose.models.MediaUpload || mongoose.model('MediaUpload', mediaUploadSchema);
 
 export default MediaUpload;

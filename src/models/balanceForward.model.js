@@ -14,6 +14,7 @@ const balanceForwardSchema = new mongoose.Schema(
 
 balanceForwardSchema.index({ group: 1, toCycle: 1 });
 
-const BalanceForward = mongoose.model('BalanceForward', balanceForwardSchema);
+// Reuse existing model if already registered (avoids conflict with TS version)
+const BalanceForward = mongoose.models.BalanceForward || mongoose.model('BalanceForward', balanceForwardSchema);
 
 export default BalanceForward;

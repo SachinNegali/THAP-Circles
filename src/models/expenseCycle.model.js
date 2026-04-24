@@ -15,6 +15,7 @@ const expenseCycleSchema = new mongoose.Schema(
 
 expenseCycleSchema.index({ group: 1, status: 1 });
 
-const ExpenseCycle = mongoose.model('ExpenseCycle', expenseCycleSchema);
+// Reuse existing model if already registered (avoids conflict with TS version)
+const ExpenseCycle = mongoose.models.ExpenseCycle || mongoose.model('ExpenseCycle', expenseCycleSchema);
 
 export default ExpenseCycle;

@@ -26,20 +26,24 @@ export const updateMeSchema = z
 /**
  * Schema for GET /user/search
  * Validates query parameters for fuzzy search and pagination.
- * q: search key (fName, lName, or userId)
+ * q: search key (fName, lName, or userId) — capped at 100 chars; the
+ *    controller escapes regex metachars before querying to prevent ReDoS.
  * page: page number (default 1)
  * limit: results per page (default 10)
  */
 export const searchUsersSchema = z.object({
-  q: z.string().trim().default(''),
+  q: z.string().trim().max(100, 'Search query too long').default(''),
   page: z
     .string()
     .optional()
     .transform((val) => (val ? parseInt(val, 10) : 1))
-    .refine((val) => val > 0, 'Page must be greater than 0'),
+    .refine((val) => Number.isFinite(val) && val > 0, 'Page must be greater than 0'),
   limit: z
     .string()
     .optional()
     .transform((val) => (val ? parseInt(val, 10) : 10))
-    .refine((val) => val > 0 && val <= 100, 'Limit must be between 1 and 100'),
+    .refine(
+      (val) => Number.isFinite(val) && val > 0 && val <= 100,
+      'Limit must be between 1 and 100'
+    ),
 });

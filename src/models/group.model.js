@@ -179,6 +179,7 @@ groupSchema.methods.getMemberCount = function () {
   return this.members.length;
 };
 
-const Group = mongoose.model('Group', groupSchema);
+// Reuse existing model if already registered (avoids conflict with TS version)
+const Group = mongoose.models.Group || mongoose.model('Group', groupSchema);
 
 export default Group;

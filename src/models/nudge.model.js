@@ -14,6 +14,7 @@ const nudgeSchema = new mongoose.Schema(
 
 nudgeSchema.index({ group: 1, fromUser: 1, toUser: 1 });
 
-const Nudge = mongoose.model('Nudge', nudgeSchema);
+// Reuse existing model if already registered (avoids conflict with TS version)
+const Nudge = mongoose.models.Nudge || mongoose.model('Nudge', nudgeSchema);
 
 export default Nudge;

@@ -46,6 +46,7 @@ deviceSchema.index({ userId: 1 }, { unique: true });
 // For fetching devices sorted by activity
 deviceSchema.index({ userId: 1, lastActiveAt: -1 });
 
-const Device = mongoose.model('Device', deviceSchema);
+// Reuse existing model if already registered (avoids conflict with TS version)
+const Device = mongoose.models.Device || mongoose.model('Device', deviceSchema);
 
 export default Device;

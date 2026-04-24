@@ -19,6 +19,7 @@ const settlementSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-const Settlement = mongoose.model('Settlement', settlementSchema);
+// Reuse existing model if already registered (avoids conflict with TS version)
+const Settlement = mongoose.models.Settlement || mongoose.model('Settlement', settlementSchema);
 
 export default Settlement;

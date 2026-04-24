@@ -1,6 +1,10 @@
 import { Request, Response } from 'express';
 import User from '../models/user.model.js';
 
+/** Escape Mongo regex metacharacters before feeding user input to $regex. */
+const escapeRegex = (value: string): string =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 /**
  * GET /user/me
  *
@@ -90,13 +94,15 @@ export const searchUsers = async (req: Request, res: Response): Promise<void> =>
 
   const skip = (page - 1) * limit;
 
-  // Fuzzy search query: matches q in fName, lName, or userId
-  const query = q
+  // Fuzzy search query: matches q in fName, lName, or userId.
+  // Metacharacters are escaped to prevent ReDoS and injection via $regex.
+  const safeQ = q ? escapeRegex(q) : '';
+  const query = safeQ
     ? {
         $or: [
-          { fName: { $regex: q, $options: 'i' } },
-          { lName: { $regex: q, $options: 'i' } },
-          { userId: { $regex: q, $options: 'i' } },
+          { fName: { $regex: safeQ, $options: 'i' } },
+          { lName: { $regex: safeQ, $options: 'i' } },
+          { userId: { $regex: safeQ, $options: 'i' } },
         ],
       }
     : {};

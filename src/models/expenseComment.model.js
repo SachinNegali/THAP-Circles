@@ -9,6 +9,7 @@ const expenseCommentSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-const ExpenseComment = mongoose.model('ExpenseComment', expenseCommentSchema);
+// Reuse existing model if already registered (avoids conflict with TS version)
+const ExpenseComment = mongoose.models.ExpenseComment || mongoose.model('ExpenseComment', expenseCommentSchema);
 
 export default ExpenseComment;

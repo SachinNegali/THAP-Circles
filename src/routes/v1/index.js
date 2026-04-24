@@ -5,20 +5,20 @@ import express from 'express';
  * Google authentication, refresh token rotation, and logout.
  */
 import authRoute from '../../../dist/routes/v1/auth.routes.js';
-import groupRoute from './group.route.js';
-import messageRoute from './message.route.js';
-import tripRoute from './trip.route.js';
+import groupRoute from '../../../dist/routes/v1/group.route.js';
+import messageRoute from '../../../dist/routes/v1/message.route.js';
+import tripRoute from '../../../dist/routes/v1/trip.route.js';
 import eventRoute from './event.route.js';
 import sseRoute from './sse.route.js';
 import notificationRoute from './notification.route.js';
 
 // E2EE routes
-import deviceRoute from './device.route.js';
+import deviceRoute from '../../../dist/routes/v1/device.route.js';
 import keyRoute from './key.route.js';
 import encryptedMessageRoute from './encryptedMessage.route.js';
-import mediaRoute from './media.route.js';
+import mediaRoute from '../../../dist/routes/v1/media.route.js';
 import senderKeyRoute from './senderKey.route.js';
-import expenseRoute from './expense.route.js';
+import expenseRoute from '../../../dist/routes/v1/expense.route.js';
 import userRoute from '../../../dist/routes/v1/user.route.js';
 import userProfileRoute from '../../../dist/routes/v1/userProfile.route.js';
 

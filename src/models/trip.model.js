@@ -206,6 +206,7 @@ tripSchema.methods.removeJoinRequest = async function (userId) {
   return this.save();
 };
 
-const Trip = mongoose.model('Trip', tripSchema);
+// Reuse existing model if already registered (avoids conflict with TS version)
+const Trip = mongoose.models.Trip || mongoose.model('Trip', tripSchema);
 
 export default Trip;
