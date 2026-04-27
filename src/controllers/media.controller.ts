@@ -130,7 +130,7 @@ export const getMedia = async (req: Request, res: Response): Promise<void> => {
 export const initUpload = async (req: Request, res: Response): Promise<void> => {
   const userId = requireUserId(req, res);
   if (!userId) return;
-
+  console.log("upload INIT",req.body);
   try {
     const { chatId, messageId, imageId, mimeType, sizeBytes } =
       req.body as InitUploadInput;
@@ -142,6 +142,7 @@ export const initUpload = async (req: Request, res: Response): Promise<void> => 
     });
     res.json({ success: true, data });
   } catch (error) {
+    console.log("error in init upload",error);
     handleServiceError(res, error, 'Failed to initialize upload');
   }
 };

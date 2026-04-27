@@ -22,10 +22,10 @@ import {
 
 const router = Router();
 
-/** In-memory multer for the legacy encrypted blob upload. 100 MB cap. */
+/** In-memory multer for the legacy encrypted blob upload. 1 GB cap. */
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 100 * 1024 * 1024 },
+  limits: { fileSize: 1024 * 1024 * 1024 },
 });
 
 router.use(authMiddleware);

@@ -6,7 +6,7 @@ const objectIdSchema = z
   .trim()
   .refine((v) => Types.ObjectId.isValid(v), { message: 'Invalid id' });
 
-const MAX_FILE_SIZE = 100 * 1024 * 1024;
+const MAX_FILE_SIZE = 1024 * 1024 * 1024;
 const MIN_FILE_SIZE = 1;
 
 const ALLOWED_MIME_TYPES = [
@@ -16,6 +16,11 @@ const ALLOWED_MIME_TYPES = [
   'image/heic',
   'image/heif',
   'image/gif',
+  'video/mp4',
+  'video/quicktime',
+  'video/webm',
+  'video/x-matroska',
+  'video/3gpp',
 ] as const;
 
 /** UUID v4 shape used for client-generated image IDs. */

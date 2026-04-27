@@ -23,7 +23,7 @@ const s3Client = new S3Client({
 });
 
 const BUCKET_NAME = process.env['AWS_S3_BUCKET'] || 'circles-e2ee-media';
-const MAX_FILE_SIZE = 100 * 1024 * 1024;
+const MAX_FILE_SIZE = 1024 * 1024 * 1024;
 
 const generateMediaId = (): string => {
   const timestamp = Date.now().toString(36);
@@ -73,7 +73,7 @@ export const uploadMedia = async (
 
   const fileSize = file.size ?? file.buffer.length;
   if (fileSize > MAX_FILE_SIZE) {
-    throw new MediaError('Media file exceeds maximum size (100 MB)', {
+    throw new MediaError('Media file exceeds maximum size (1 GB)', {
       code: 'E2E_005',
     });
   }
@@ -159,16 +159,38 @@ const ALLOWED_IMAGE_TYPES = [
   'image/gif',
 ] as const;
 
-type AllowedImageType = (typeof ALLOWED_IMAGE_TYPES)[number];
+const ALLOWED_VIDEO_TYPES = [
+  'video/mp4',
+  'video/quicktime',
+  'video/webm',
+  'video/x-matroska',
+  'video/3gpp',
+] as const;
 
-const MIME_TO_EXT: Record<AllowedImageType, string> = {
+const ALLOWED_MEDIA_TYPES = [
+  ...ALLOWED_IMAGE_TYPES,
+  ...ALLOWED_VIDEO_TYPES,
+] as const;
+
+type AllowedVideoType = (typeof ALLOWED_VIDEO_TYPES)[number];
+type AllowedMediaType = (typeof ALLOWED_MEDIA_TYPES)[number];
+
+const MIME_TO_EXT: Record<AllowedMediaType, string> = {
   'image/jpeg': '.jpg',
   'image/png': '.png',
   'image/webp': '.webp',
   'image/heic': '.heic',
   'image/heif': '.heif',
   'image/gif': '.gif',
+  'video/mp4': '.mp4',
+  'video/quicktime': '.mov',
+  'video/webm': '.webm',
+  'video/x-matroska': '.mkv',
+  'video/3gpp': '.3gp',
 };
+
+const isVideoMime = (mimeType: string): mimeType is AllowedVideoType =>
+  (ALLOWED_VIDEO_TYPES as readonly string[]).includes(mimeType);
 
 export interface InitUploadInput {
   messageId: string;
@@ -201,15 +223,15 @@ export const initUpload = async (
     throw new MediaError('Not a participant in this chat', { code: 'E2E_004' });
   }
 
-  if (!ALLOWED_IMAGE_TYPES.includes(mimeType as AllowedImageType)) {
+  if (!(ALLOWED_MEDIA_TYPES as readonly string[]).includes(mimeType)) {
     throw new MediaError(
-      'Unsupported image type. Allowed: jpeg, png, webp, heic, heif, gif',
+      'Unsupported media type. Allowed images: jpeg, png, webp, heic, heif, gif. Allowed videos: mp4, quicktime/mov, webm, mkv, 3gp',
       { status: 400 }
     );
   }
 
   if (sizeBytes > MAX_FILE_SIZE) {
-    throw new MediaError('Media file exceeds maximum size (100 MB)', {
+    throw new MediaError('Media file exceeds maximum size (1 GB)', {
       code: 'E2E_005',
     });
   }
@@ -224,7 +246,7 @@ export const initUpload = async (
     };
   }
 
-  const ext = MIME_TO_EXT[mimeType as AllowedImageType] || '.jpg';
+  const ext = MIME_TO_EXT[mimeType as AllowedMediaType] || '.bin';
   const s3Key = `uploads/${chatId}/${imageId}${ext}`;
   const expiresAt = new Date(Date.now() + 3600 * 1000);
 
@@ -304,6 +326,25 @@ export const completeUpload = async (
       throw new MediaError('File not found in storage', { status: 400 });
     }
     throw err;
+  }
+
+  if (isVideoMime(upload.mimeType)) {
+    await MediaUpload.updateOne(
+      { imageId },
+      {
+        $set: {
+          status: 'completed',
+          optimizedS3Key: upload.s3Key,
+          updatedAt: new Date(),
+        },
+      }
+    );
+    return {
+      imageId,
+      status: 'completed',
+      thumbnailUrl: null,
+      optimizedUrl: null,
+    };
   }
 
   await MediaUpload.updateOne(
