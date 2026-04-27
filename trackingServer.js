@@ -1,5 +1,6 @@
 import uWS from 'uWebSockets.js';
 import jwt from 'jsonwebtoken';
+import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -15,6 +16,7 @@ import {
   mirrorRemoveRoster,
   mirrorFrame,
   mirrorPosition,
+  mirrorUserInfo,
   hydrateGroup,
 } from './src/services/trackingState.service.js';
 import {
@@ -38,12 +40,84 @@ const userMetadata = new WeakMap();
 // Group member roster: Map<groupId, Map<numericId, userId(ObjectId)>>
 const groupRosters = new Map();
 
+// Per-group user info: Map<groupId, Map<userId, {fName, lName, picture, email}>>
+const groupUserInfo = new Map();
+
+// Process-wide cache to skip Mongo round-trips on reconnects.
+// Map<userId, { info, fetchedAt }>
+const userInfoCache = new Map();
+const USER_INFO_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * Look up a user's display info (name + picture) from Mongo.
+ * Bypasses the Mongoose schema and reads the raw collection so we get every
+ * field actually stored — the JS-side User schema doesn't declare `picture`,
+ * but it's written by the Google OAuth flow.
+ */
+async function fetchUserInfo(userId) {
+  const cached = userInfoCache.get(userId);
+  if (cached && Date.now() - cached.fetchedAt < USER_INFO_TTL_MS) {
+    return cached.info;
+  }
+  try {
+    if (mongoose.connection.readyState !== 1) return null;
+    const doc = await mongoose.connection.db
+      .collection('users')
+      .findOne(
+        { _id: new mongoose.Types.ObjectId(userId) },
+        { projection: { fName: 1, lName: 1, picture: 1, email: 1 } }
+      );
+    if (!doc) return null;
+    const info = {
+      userId,
+      fName: doc.fName || '',
+      lName: doc.lName || '',
+      picture: doc.picture || '',
+      email: doc.email || '',
+    };
+    userInfoCache.set(userId, { info, fetchedAt: Date.now() });
+    return info;
+  } catch (err) {
+    console.warn(`[USER-INFO] fetch failed for ${userId}: ${err.message}`);
+    return null;
+  }
+}
+
+function setGroupUserInfo(groupId, userId, info) {
+  if (!groupUserInfo.has(groupId)) groupUserInfo.set(groupId, new Map());
+  groupUserInfo.get(groupId).set(userId, info);
+}
+
+function getGroupUserInfo(groupId, userId) {
+  return groupUserInfo.get(groupId)?.get(userId) || null;
+}
+
+function removeGroupUserInfo(groupId, userId) {
+  const m = groupUserInfo.get(groupId);
+  if (!m) return;
+  m.delete(userId);
+  if (m.size === 0) groupUserInfo.delete(groupId);
+}
+
+/** Build the public-facing user object embedded in roster/peer events. */
+function buildUserPayload(userId, numericId, info) {
+  return {
+    userId,
+    numericId,
+    fName: info?.fName || '',
+    lName: info?.lName || '',
+    name: info ? `${info.fName || ''} ${info.lName || ''}`.trim() : '',
+    picture: info?.picture || '',
+  };
+}
+
 // Last broadcast position per user: Map<"groupId:userId", {lat, lng}>
 const lastPositions = new Map();
 // Last raw 40-byte binary frame per user: Map<"groupId:userId", Buffer>
 // Used to replay the most recent known position to newly-joining clients.
 const lastFrames = new Map();
-const MIN_DISTANCE_METERS = 15;
+// const MIN_DISTANCE_METERS = 15;
+const MIN_DISTANCE_METERS = 1;
 
 /** Convert MongoDB ObjectId → numeric uint32 (same logic as client-side). */
 function objectIdToNumericId(objectId) {
@@ -358,36 +432,56 @@ app.ws('/*', {
         for (const [uid, pos] of hydrated.positions) {
           lastPositions.set(`${groupId}:${uid}`, { ...pos, ts: Date.now() });
         }
-        console.log(`[HYDRATE] group ${groupId}: restored ${hydrated.roster.size} roster / ${hydrated.frames.size} frames from Redis`);
+        if (hydrated.userInfo) {
+          for (const [uid, info] of hydrated.userInfo) {
+            setGroupUserInfo(groupId, uid, info);
+            userInfoCache.set(uid, { info, fetchedAt: Date.now() });
+          }
+        }
+        console.log(`[HYDRATE] group ${groupId}: restored ${hydrated.roster.size} roster / ${hydrated.frames.size} frames / ${hydrated.userInfo?.size || 0} user-infos from Redis`);
       }
     }
 
-    // The socket may have closed during the await. Bail if so.
+    // Fetch the joiner's display info so the welcome roster + peer_joined
+    // carry real names and avatars instead of placeholders.
+    const myInfo = await fetchUserInfo(userId);
+
+    // The socket may have closed during the awaits. Bail if so.
     if (!userMetadata.get(ws)) return;
+
+    if (myInfo) {
+      setGroupUserInfo(groupId, userId, myInfo);
+      mirrorUserInfo(groupId, userId, myInfo);
+    }
 
     // Add to group (updates roster)
     addToGroup(groupId, ws, userId);
 
     const groupSize = groups.get(groupId)?.size || 0;
-    console.log(`[CONNECT] User ${userId} (num:${numericId}) joined group ${groupId} (${groupSize} members)`);
+    console.log(`[CONNECT] User ${userId} (${myInfo?.fName || 'unknown'}) joined group ${groupId} (${groupSize} members)`);
 
-    // Build roster snapshot: { numericId: objectId, ... }
+    // Build roster snapshot keyed by numericId, with full user info per entry.
+    // Late joiners use this to render existing members with real names/avatars
+    // instead of "user-XXXXXX" placeholders.
     const roster = {};
     const rosterMap = groupRosters.get(groupId);
     if (rosterMap) {
       for (const [nid, oid] of rosterMap) {
-        roster[nid] = oid;
+        roster[nid] = buildUserPayload(oid, nid, getGroupUserInfo(groupId, oid));
       }
     }
 
-    // Send welcome with roster to the connecting client
+    const myPayload = buildUserPayload(userId, numericId, myInfo);
+
+    // Send welcome with rich roster to the connecting client
     const welcomeMsg = JSON.stringify({
       type: 'welcome',
       userId,
       groupId,
       groupSize,
       roster,
-      timestamp: Date.now()
+      me: myPayload,
+      timestamp: Date.now(),
     });
     ws.send(welcomeMsg, false, true);
 
@@ -401,13 +495,14 @@ app.ws('/*', {
       }
     }
 
-    // Broadcast peer_joined to all other members
+    // Broadcast peer_joined (with the joiner's user info) to other members
     const joinMsg = JSON.stringify({
       type: 'peer_joined',
       userId,
       numericId,
       groupSize,
-      timestamp: Date.now()
+      user: myPayload,
+      timestamp: Date.now(),
     });
     const group = groups.get(groupId);
     if (group) {
@@ -468,21 +563,26 @@ app.ws('/*', {
 
     const { userId, groupId, numericId } = metadata;
 
+    // Snapshot user info before we drop it so peer_left can carry name/avatar.
+    const leaverInfo = getGroupUserInfo(groupId, userId);
+
     removeFromGroup(groupId, ws, userId);
     lastPositions.delete(`${groupId}:${userId}`);
     lastFrames.delete(`${groupId}:${userId}`);
     clearDirty(groupId, userId);
+    removeGroupUserInfo(groupId, userId);
 
     const groupSize = groups.get(groupId)?.size || 0;
     console.log(`[DISCONNECT] User ${userId} (num:${numericId}) left group ${groupId} (${groupSize} remaining)`);
 
-    // Broadcast peer_left to remaining members
+    // Broadcast peer_left to remaining members, including the leaver's info
     const leftMsg = JSON.stringify({
       type: 'peer_left',
       userId,
       numericId,
       groupSize,
-      timestamp: Date.now()
+      user: buildUserPayload(userId, numericId, leaverInfo),
+      timestamp: Date.now(),
     });
     const group = groups.get(groupId);
     if (group) {
@@ -553,6 +653,17 @@ app.post('/poll/send', (res, req) => {
       }
 
       const userId = decoded.userId || decoded.sub;
+
+      // Lazily fetch and mirror user info so polling-only clients still
+      // appear with real names/avatars in the roster.
+      if (!getGroupUserInfo(groupId, userId)) {
+        fetchUserInfo(userId).then((info) => {
+          if (info) {
+            setGroupUserInfo(groupId, userId, info);
+            mirrorUserInfo(groupId, userId, info);
+          }
+        });
+      }
 
       const binaryBuf = Buffer.from(data, 'base64');
       if (!shouldBroadcast(groupId, userId, binaryBuf)) {

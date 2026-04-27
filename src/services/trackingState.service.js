@@ -8,6 +8,7 @@ const TTL_SEC = parseInt(process.env.TRACKING_REDIS_TTL_SEC || '900', 10); // 15
 const rosterKey = (g) => `trk:roster:${g}`;
 const framesKey = (g) => `trk:frames:${g}`;
 const posKey = (g) => `trk:pos:${g}`;
+const userInfoKey = (g) => `trk:userinfo:${g}`;
 
 /** Fire-and-forget wrapper — never block the relay path on Redis errors. */
 function swallow(promise, op) {
@@ -32,8 +33,20 @@ export function mirrorRemoveRoster(groupId, numericId, userId) {
       .hdel(rosterKey(groupId), numericId)
       .hdel(framesKey(groupId), userId)
       .hdel(posKey(groupId), userId)
+      .hdel(userInfoKey(groupId), userId)
       .exec(),
     'mirrorRemoveRoster'
+  );
+}
+
+export function mirrorUserInfo(groupId, userId, info) {
+  swallow(
+    redis
+      .multi()
+      .hset(userInfoKey(groupId), userId, JSON.stringify(info))
+      .expire(userInfoKey(groupId), TTL_SEC)
+      .exec(),
+    'mirrorUserInfo'
   );
 }
 
@@ -70,16 +83,18 @@ export function mirrorPosition(groupId, userId, lat, lng) {
  */
 export async function hydrateGroup(groupId) {
   try {
-    const [rosterRaw, framesRaw, posRaw] = await Promise.all([
+    const [rosterRaw, framesRaw, posRaw, userInfoRaw] = await Promise.all([
       redis.hgetall(rosterKey(groupId)),
       redis.hgetall(framesKey(groupId)),
       redis.hgetall(posKey(groupId)),
+      redis.hgetall(userInfoKey(groupId)),
     ]);
 
     const hasAny =
       Object.keys(rosterRaw).length ||
       Object.keys(framesRaw).length ||
-      Object.keys(posRaw).length;
+      Object.keys(posRaw).length ||
+      Object.keys(userInfoRaw).length;
     if (!hasAny) return null;
 
     const roster = new Map();
@@ -100,7 +115,12 @@ export async function hydrateGroup(groupId) {
       }
     }
 
-    return { roster, frames, positions };
+    const userInfo = new Map();
+    for (const [uid, json] of Object.entries(userInfoRaw)) {
+      try { userInfo.set(uid, JSON.parse(json)); } catch (_) { /* ignore corrupt entry */ }
+    }
+
+    return { roster, frames, positions, userInfo };
   } catch (err) {
     log.warn({ err, groupId }, 'hydrateGroup failed — starting cold');
     return null;
