@@ -143,6 +143,8 @@ const mediaWorker = new Worker(
       optimizedUrl,
       width: metadata.width,
       height: metadata.height,
+      mimeType,
+      mediaType: 'image',
     });
 
     const allComplete = messageUpdate?.allComplete ?? false;
@@ -152,6 +154,8 @@ const mediaWorker = new Worker(
       imageId, messageId, chatId, status: 'completed',
       thumbnailUrl, optimizedUrl,
       width: metadata.width, height: metadata.height,
+      mimeType,
+      mediaType: 'image',
       allImagesComplete: allComplete,
     });
 

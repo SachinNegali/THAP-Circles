@@ -11,6 +11,10 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import Group from '../models/group.model.js';
 import MediaUpload, { IMediaUpload } from '../models/mediaUpload.model.js';
 import { mediaQueue } from '../queues/media.queue.js';
+import sseManager from '../services/sse.service.js';
+import { updateMessageImage } from '../services/message.service.js';
+
+const PRESIGNED_URL_TTL = 7 * 24 * 60 * 60;
 
 type ObjectIdLike = string | Types.ObjectId;
 
@@ -329,21 +333,51 @@ export const completeUpload = async (
   }
 
   if (isVideoMime(upload.mimeType)) {
+    const optimizedUrl = await getSignedUrl(
+      s3Client,
+      new GetObjectCommand({ Bucket: BUCKET_NAME, Key: upload.s3Key }),
+      { expiresIn: PRESIGNED_URL_TTL }
+    );
+
     await MediaUpload.updateOne(
       { imageId },
       {
         $set: {
           status: 'completed',
           optimizedS3Key: upload.s3Key,
+          optimizedUrl,
           updatedAt: new Date(),
         },
       }
     );
+
+    const messageUpdate = await updateMessageImage(upload.messageId, imageId, {
+      status: 'completed' as const,
+      thumbnailUrl: null,
+      optimizedUrl,
+      mimeType: upload.mimeType,
+      mediaType: 'video',
+    });
+
+    const allComplete = messageUpdate?.allComplete ?? false;
+
+    sseManager.sendToUser(upload.userId, 'upload:status', {
+      imageId,
+      messageId: upload.messageId,
+      chatId: upload.chatId.toString(),
+      status: 'completed',
+      thumbnailUrl: null,
+      optimizedUrl,
+      mimeType: upload.mimeType,
+      mediaType: 'video',
+      allImagesComplete: allComplete,
+    });
+
     return {
       imageId,
       status: 'completed',
       thumbnailUrl: null,
-      optimizedUrl: null,
+      optimizedUrl,
     };
   }
 
@@ -386,6 +420,8 @@ export const getUploadStatus = async (
     optimizedUrl: upload.optimizedUrl,
     width: upload.width,
     height: upload.height,
+    mimeType: upload.mimeType,
+    mediaType: isVideoMime(upload.mimeType) ? 'video' as const : 'image' as const,
   };
 };
 
@@ -398,6 +434,8 @@ export const batchUploadStatus = async (
   optimizedUrl: string | null;
   width: number | null;
   height: number | null;
+  mimeType: string;
+  mediaType: 'image' | 'video';
 }>> => {
   const uploads = await MediaUpload.find({
     imageId: { $in: imageIds },
@@ -410,6 +448,8 @@ export const batchUploadStatus = async (
     optimizedUrl: string | null;
     width: number | null;
     height: number | null;
+    mimeType: string;
+    mediaType: 'image' | 'video';
   }> = {};
   for (const upload of uploads) {
     result[upload.imageId] = {
@@ -418,6 +458,8 @@ export const batchUploadStatus = async (
       optimizedUrl: upload.optimizedUrl,
       width: upload.width,
       height: upload.height,
+      mimeType: upload.mimeType,
+      mediaType: isVideoMime(upload.mimeType) ? 'video' : 'image',
     };
   }
   return result;

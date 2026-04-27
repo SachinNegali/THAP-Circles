@@ -14,6 +14,8 @@ export interface IMessageImage {
   optimizedUrl: string | null;
   width: number | null;
   height: number | null;
+  mimeType?: string | null;
+  mediaType?: 'image' | 'video';
 }
 
 export interface IMessageMetadata {
