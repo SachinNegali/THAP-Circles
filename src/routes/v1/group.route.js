@@ -2,7 +2,7 @@ import express from 'express';
 import * as groupController from '../../controllers/group.controller.js';
 import * as messageController from '../../controllers/message.controller.js';
 import auth from '../../middlewares/auth.js';
-import { verifyGroupMembership, verifyGroupAdmin, verifyGroupCreator } from '../../middlewares/groupAuth.js';
+import { verifyGroupMembership, verifyGroupAdmin, verifyGroupCreator } from '../../middlewares/groupAuth';
 
 const router = express.Router();
 

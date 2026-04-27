@@ -1,13 +1,13 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
-import app from './src/app.js';
-import connectDB from './src/config/db.js';
-import logger from './src/config/logger.js';
+import app from './dist/app.js';
+import connectDB from './dist/config/db.js';
+import logger from './dist/config/logger.js';
 
 // Image processing worker & reconciliation cron (same-process mode)
-import './src/workers/media.worker.js';
-import './src/cron/reconcile-uploads.js';
+import './dist/workers/media.worker.js';
+import './dist/cron/reconcile-uploads.js';
 
 // Connect to Database
 connectDB();

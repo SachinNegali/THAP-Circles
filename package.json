@@ -4,7 +4,7 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && rsync -a --ignore-existing --include='*/' --include='*.js' --exclude='*' src/ dist/",
     "start": "npm run build && node index.js",
     "dev": "npm run build && nodemon index.js",
     "tracking": "node trackingServer.js",
