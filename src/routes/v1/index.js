@@ -9,8 +9,8 @@ import groupRoute from '../../../dist/routes/v1/group.route.js';
 import messageRoute from '../../../dist/routes/v1/message.route.js';
 import tripRoute from '../../../dist/routes/v1/trip.route.js';
 import eventRoute from './event.route.js';
-import sseRoute from './sse.route.js';
-import notificationRoute from './notification.route.js';
+import sseRoute from '../../../dist/routes/v1/sse.route.js';
+import notificationRoute from '../../../dist/routes/v1/notification.route.js';
 
 // E2EE routes
 import deviceRoute from '../../../dist/routes/v1/device.route.js';

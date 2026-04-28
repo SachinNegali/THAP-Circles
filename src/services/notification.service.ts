@@ -1,20 +1,30 @@
-import Notification from '../models/notification.model.js';
+import { Types } from 'mongoose';
+import Notification, { INotification, NotificationType } from '../models/notification.model.js';
 import sseManager from './sse.service.js';
 import firebaseService from './firebase.service.js';
 import logger from '../config/logger.js';
 
 const log = logger.child({ module: 'notification' });
 
-/**
- * Create and send a notification to a user
- * @param {ObjectId} userId - Recipient user ID
- * @param {string} type - Notification type
- * @param {string} title - Notification title
- * @param {string} message - Notification message
- * @param {Object} data - Additional data
- * @returns {Promise<Notification>}
- */
-export const createNotification = async (userId, type, title, message, data = {}) => {
+type ObjectIdLike = Types.ObjectId | string;
+
+export interface NotificationListResult {
+  notifications: INotification[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    pages: number;
+  };
+}
+
+export const createNotification = async (
+  userId: ObjectIdLike,
+  type: NotificationType | string,
+  title: string,
+  message: string,
+  data: Record<string, unknown> = {}
+): Promise<INotification> => {
   const notification = await Notification.create({
     user: userId,
     type,
@@ -25,9 +35,8 @@ export const createNotification = async (userId, type, title, message, data = {}
     isRead: false,
   });
 
-  // Try to send via SSE if user is online
   const isOnline = sseManager.isUserOnline(userId);
-  
+
   if (isOnline) {
     const sent = sseManager.sendToUser(userId, 'notification', {
       id: notification._id,
@@ -38,13 +47,11 @@ export const createNotification = async (userId, type, title, message, data = {}
       createdAt: notification.createdAt,
     });
 
-    // Mark as delivered if sent successfully
     if (sent) {
       notification.isDelivered = true;
       await notification.save();
     }
   } else {
-    // User is offline — attempt FCM push notification
     try {
       await firebaseService.sendPushToUser(userId, {
         type: notification.type,
@@ -60,16 +67,13 @@ export const createNotification = async (userId, type, title, message, data = {}
   return notification;
 };
 
-/**
- * Create and send notifications to multiple users
- * @param {Array<ObjectId>} userIds - Array of recipient user IDs
- * @param {string} type - Notification type
- * @param {string} title - Notification title
- * @param {string} message - Notification message
- * @param {Object} data - Additional data
- * @returns {Promise<Array<Notification>>}
- */
-export const createNotifications = async (userIds, type, title, message, data = {}) => {
+export const createNotifications = async (
+  userIds: ObjectIdLike[],
+  type: NotificationType | string,
+  title: string,
+  message: string,
+  data: Record<string, unknown> = {}
+): Promise<INotification[]> => {
   const notifications = await Promise.all(
     userIds.map((userId) => createNotification(userId, type, title, message, data))
   );
@@ -77,14 +81,11 @@ export const createNotifications = async (userIds, type, title, message, data = 
   return notifications;
 };
 
-/**
- * Get notifications for a user (paginated)
- * @param {ObjectId} userId - User ID
- * @param {number} page - Page number
- * @param {number} limit - Items per page
- * @returns {Promise<Object>}
- */
-export const getNotifications = async (userId, page = 1, limit = 20) => {
+export const getNotifications = async (
+  userId: ObjectIdLike,
+  page = 1,
+  limit = 20
+): Promise<NotificationListResult> => {
   const skip = (page - 1) * limit;
 
   const notifications = await Notification.find({ user: userId })
@@ -105,27 +106,19 @@ export const getNotifications = async (userId, page = 1, limit = 20) => {
   };
 };
 
-/**
- * Get undelivered notifications for a user (for long polling)
- * @param {ObjectId} userId - User ID
- * @returns {Promise<Array<Notification>>}
- */
-export const getUndeliveredNotifications = async (userId) => {
-  const notifications = await Notification.find({
+export const getUndeliveredNotifications = async (
+  userId: ObjectIdLike
+): Promise<INotification[]> => {
+  return Notification.find({
     user: userId,
     isDelivered: false,
   }).sort({ createdAt: 1 });
-
-  return notifications;
 };
 
-/**
- * Mark notifications as delivered
- * @param {Array<ObjectId>} notificationIds - Array of notification IDs
- * @param {ObjectId} userId - User ID (for verification)
- * @returns {Promise<number>}
- */
-export const markAsDelivered = async (notificationIds, userId) => {
+export const markAsDelivered = async (
+  notificationIds: ObjectIdLike[],
+  userId: ObjectIdLike
+): Promise<number> => {
   const result = await Notification.updateMany(
     {
       _id: { $in: notificationIds },
@@ -140,13 +133,10 @@ export const markAsDelivered = async (notificationIds, userId) => {
   return result.modifiedCount;
 };
 
-/**
- * Mark a notification as read
- * @param {ObjectId} notificationId - Notification ID
- * @param {ObjectId} userId - User ID
- * @returns {Promise<Notification>}
- */
-export const markAsRead = async (notificationId, userId) => {
+export const markAsRead = async (
+  notificationId: ObjectIdLike,
+  userId: ObjectIdLike
+): Promise<INotification> => {
   const notification = await Notification.findOne({
     _id: notificationId,
     user: userId,
@@ -163,12 +153,7 @@ export const markAsRead = async (notificationId, userId) => {
   return notification;
 };
 
-/**
- * Mark all notifications as read for a user
- * @param {ObjectId} userId - User ID
- * @returns {Promise<number>}
- */
-export const markAllAsRead = async (userId) => {
+export const markAllAsRead = async (userId: ObjectIdLike): Promise<number> => {
   const result = await Notification.updateMany(
     {
       user: userId,
@@ -182,13 +167,10 @@ export const markAllAsRead = async (userId) => {
   return result.modifiedCount;
 };
 
-/**
- * Delete a notification
- * @param {ObjectId} notificationId - Notification ID
- * @param {ObjectId} userId - User ID
- * @returns {Promise<Notification>}
- */
-export const deleteNotification = async (notificationId, userId) => {
+export const deleteNotification = async (
+  notificationId: ObjectIdLike,
+  userId: ObjectIdLike
+): Promise<INotification> => {
   const notification = await Notification.findOneAndDelete({
     _id: notificationId,
     user: userId,
@@ -201,16 +183,9 @@ export const deleteNotification = async (notificationId, userId) => {
   return notification;
 };
 
-/**
- * Get unread notification count
- * @param {ObjectId} userId - User ID
- * @returns {Promise<number>}
- */
-export const getUnreadCount = async (userId) => {
-  const count = await Notification.countDocuments({
+export const getUnreadCount = async (userId: ObjectIdLike): Promise<number> => {
+  return Notification.countDocuments({
     user: userId,
     isRead: false,
   });
-
-  return count;
 };

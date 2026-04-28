@@ -1,36 +1,37 @@
+import type { Response } from 'express';
+import type { Types } from 'mongoose';
 import logger from '../config/logger.js';
 
 const log = logger.child({ module: 'sse' });
 
+export type UserIdLike = Types.ObjectId | string;
+
+export interface SendToUsersResult {
+  successful: string[];
+  failed: string[];
+}
+
 class SSEConnectionManager {
+  private static instance: SSEConnectionManager | undefined;
+
+  private connections: Map<string, Response> = new Map();
+  private lastActivity: Map<string, number> = new Map();
+
   constructor() {
     if (SSEConnectionManager.instance) {
       return SSEConnectionManager.instance;
     }
-
-    // Map of userId -> SSE response object
-    this.connections = new Map();
-    
-    // Map of userId -> last activity timestamp
-    this.lastActivity = new Map();
-
     SSEConnectionManager.instance = this;
   }
 
-  /**
-   * Add a new SSE connection for a user
-   * @param {string} userId - User ID
-   * @param {Response} res - Express response object
-   */
-  addConnection(userId, res) {
+  addConnection(userId: UserIdLike, res: Response): void {
     const userIdStr = userId.toString();
-    
-    // Close existing connection if any
-    if (this.connections.has(userIdStr)) {
-      const existingRes = this.connections.get(userIdStr);
+
+    const existingRes = this.connections.get(userIdStr);
+    if (existingRes) {
       try {
         existingRes.end();
-      } catch (error) {
+      } catch {
         // Connection already closed
       }
     }
@@ -41,13 +42,9 @@ class SSEConnectionManager {
     log.info({ userId: userIdStr, totalConnections: this.connections.size }, 'User connected');
   }
 
-  /**
-   * Remove a user's SSE connection
-   * @param {string} userId - User ID
-   */
-  removeConnection(userId) {
+  removeConnection(userId: UserIdLike): void {
     const userIdStr = userId.toString();
-    
+
     if (this.connections.has(userIdStr)) {
       this.connections.delete(userIdStr);
       this.lastActivity.delete(userIdStr);
@@ -55,23 +52,11 @@ class SSEConnectionManager {
     }
   }
 
-  /**
-   * Check if a user is currently online (has active SSE connection)
-   * @param {string} userId - User ID
-   * @returns {boolean}
-   */
-  isUserOnline(userId) {
+  isUserOnline(userId: UserIdLike): boolean {
     return this.connections.has(userId.toString());
   }
 
-  /**
-   * Send an event to a specific user
-   * @param {string} userId - User ID
-   * @param {string} event - Event name
-   * @param {Object} data - Event data
-   * @returns {boolean} - True if sent successfully, false otherwise
-   */
-  sendToUser(userId, event, data) {
+  sendToUser(userId: UserIdLike, event: string, data: unknown): boolean {
     const userIdStr = userId.toString();
     const res = this.connections.get(userIdStr);
     if (!res) {
@@ -90,15 +75,8 @@ class SSEConnectionManager {
     }
   }
 
-  /**
-   * Send an event to multiple users
-   * @param {Array<string>} userIds - Array of user IDs
-   * @param {string} event - Event name
-   * @param {Object} data - Event data
-   * @returns {Object} - Object with successful and failed user IDs
-   */
-  sendToUsers(userIds, event, data) {
-    const results = {
+  sendToUsers(userIds: UserIdLike[], event: string, data: unknown): SendToUsersResult {
+    const results: SendToUsersResult = {
       successful: [],
       failed: [],
     };
@@ -115,36 +93,21 @@ class SSEConnectionManager {
     return results;
   }
 
-  /**
-   * Send heartbeat to a specific user
-   * @param {string} userId - User ID
-   */
-  sendHeartbeat(userId) {
+  sendHeartbeat(userId: UserIdLike): void {
     this.sendToUser(userId, 'heartbeat', { timestamp: Date.now() });
   }
 
-  /**
-   * Get all connected user IDs
-   * @returns {Array<string>}
-   */
-  getConnectedUsers() {
+  getConnectedUsers(): string[] {
     return Array.from(this.connections.keys());
   }
 
-  /**
-   * Get connection count
-   * @returns {number}
-   */
-  getConnectionCount() {
+  getConnectionCount(): number {
     return this.connections.size;
   }
 
-  /**
-   * Clean up stale connections (no activity for more than 5 minutes)
-   */
-  cleanupStaleConnections() {
+  cleanupStaleConnections(): void {
     const now = Date.now();
-    const staleThreshold = 5 * 60 * 1000; // 5 minutes
+    const staleThreshold = 5 * 60 * 1000;
 
     this.lastActivity.forEach((timestamp, userId) => {
       if (now - timestamp > staleThreshold) {
@@ -155,10 +118,8 @@ class SSEConnectionManager {
   }
 }
 
-// Create singleton instance
 const sseManager = new SSEConnectionManager();
 
-// Cleanup stale connections every 2 minutes
 setInterval(() => {
   sseManager.cleanupStaleConnections();
 }, 2 * 60 * 1000);
