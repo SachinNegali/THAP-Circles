@@ -48,30 +48,53 @@ const dateStringSchema = z
   .trim()
   .refine((v) => !Number.isNaN(new Date(v).getTime()), { message: 'Invalid date' });
 
+/** "HH:MM" 24-hour clock, optional and nullable on input. */
+const startTimeSchema = z
+  .string()
+  .trim()
+  .regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'startTime must be HH:MM')
+  .nullable()
+  .optional();
+
+const daysSchema = z
+  .number()
+  .int('days must be an integer')
+  .min(1, 'days must be at least 1')
+  .max(365, 'days must be at most 365');
+
+const spotsSchema = z
+  .number()
+  .int('spots must be an integer')
+  .min(1, 'spots must be at least 1')
+  .max(100, 'spots must be at most 100')
+  .nullable();
+
+const distanceSchema = z.number().min(0).max(100000).optional();
+const elevationSchema = z.number().min(-1000).max(20000).optional();
+
 /**
  * POST /trips — create a trip.
- * startDate must be strictly before endDate; enforced here and again
- * in the service layer for defense in depth.
+ * Trip duration is expressed as `days`; the service derives endDate from
+ * startDate + days. `requireApproval` controls whether /join auto-admits.
  */
-export const createTripSchema = z
-  .object({
-    title: z.string().trim().min(1, 'Trip title is required').max(200),
-    description: z.string().trim().max(1000).optional(),
-    startLocation: locationSchema,
-    destination: locationSchema,
-    stops: z.array(locationSchema).max(20).optional(),
-    startDate: dateStringSchema,
-    endDate: dateStringSchema,
-    participantIds: z.array(objectIdSchema).max(100).optional(),
-  })
-  .refine((d) => new Date(d.startDate) < new Date(d.endDate), {
-    message: 'End date must be after start date',
-    path: ['endDate'],
-  });
+export const createTripSchema = z.object({
+  title: z.string().trim().min(1, 'Trip title is required').max(200),
+  description: z.string().trim().max(1000).optional(),
+  startLocation: locationSchema,
+  destination: locationSchema,
+  stops: z.array(locationSchema).max(20).optional(),
+  startDate: dateStringSchema,
+  startTime: startTimeSchema,
+  days: daysSchema,
+  spots: spotsSchema,
+  requireApproval: z.boolean().optional().default(true),
+  distance: distanceSchema,
+  elevation: elevationSchema,
+  participantIds: z.array(objectIdSchema).max(100).optional(),
+});
 
 /**
  * PATCH /trips/:id — all fields optional; at least one required.
- * Dates are validated together when either is present.
  */
 export const updateTripSchema = z
   .object({
@@ -81,18 +104,16 @@ export const updateTripSchema = z
     destination: locationSchema.optional(),
     stops: z.array(locationSchema).max(20).optional(),
     startDate: dateStringSchema.optional(),
-    endDate: dateStringSchema.optional(),
+    startTime: startTimeSchema,
+    days: daysSchema.optional(),
+    spots: spotsSchema.optional(),
+    requireApproval: z.boolean().optional(),
+    distance: distanceSchema,
+    elevation: elevationSchema,
   })
   .refine((d) => Object.keys(d).length > 0, {
     message: 'At least one field must be provided',
-  })
-  .refine(
-    (d) => {
-      if (!d.startDate || !d.endDate) return true;
-      return new Date(d.startDate) < new Date(d.endDate);
-    },
-    { message: 'End date must be after start date', path: ['endDate'] }
-  );
+  });
 
 /**
  * POST /trips/:id/participants — bulk-add participants by id.

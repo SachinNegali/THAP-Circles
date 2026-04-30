@@ -44,7 +44,13 @@ export interface ITrip {
   participants: ITripParticipant[];
   joinRequests: ITripJoinRequest[];
   startDate: Date;
+  startTime?: string | null;
+  days: number;
   endDate: Date;
+  spots: number | null;
+  requireApproval: boolean;
+  distance?: number;
+  elevation?: number;
   isActive: boolean;
   trackingGroupId?: string;
   createdAt: Date;
@@ -100,7 +106,21 @@ const tripSchema = new Schema<ITrip, TripModel, ITripMethods>(
       },
     ],
     startDate: { type: Date, required: true },
+    startTime: {
+      type: String,
+      default: null,
+      validate: {
+        validator: (v: string | null | undefined) =>
+          v == null || /^([01]\d|2[0-3]):[0-5]\d$/.test(v),
+        message: 'startTime must be HH:MM',
+      },
+    },
+    days: { type: Number, required: true, min: 1, max: 365 },
     endDate: { type: Date, required: true },
+    spots: { type: Number, default: null, min: 1, max: 100 },
+    requireApproval: { type: Boolean, default: true },
+    distance: { type: Number, min: 0, max: 100000 },
+    elevation: { type: Number, min: -1000, max: 20000 },
     isActive: { type: Boolean, default: true },
     trackingGroupId: { type: String, unique: true, sparse: true },
   },
@@ -112,9 +132,22 @@ tripSchema.index({ 'participants.user': 1, isActive: 1 });
 tripSchema.index({ startDate: 1, isActive: 1 });
 tripSchema.index({ isActive: 1, startDate: -1 });
 
-tripSchema.pre('save', function (this: TripDocument) {
-  if (this.endDate <= this.startDate) {
-    throw new Error('End date must be after start date');
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * `endDate` is derived from `startDate + days` so duration stays the
+ * single source of truth. Recompute whenever either input changes.
+ */
+tripSchema.pre('validate', function (this: TripDocument) {
+  if (this.startDate && this.days) {
+    const computed = new Date(this.startDate.getTime() + this.days * MS_PER_DAY);
+    if (
+      !this.endDate ||
+      this.isModified('startDate') ||
+      this.isModified('days')
+    ) {
+      this.endDate = computed;
+    }
   }
 });
 

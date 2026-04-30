@@ -58,7 +58,10 @@ const respondWithError = (
     message === 'User is already a participant' ||
     message === 'Join request already exists' ||
     message === 'No pending join request from this user' ||
-    message === 'User is not a participant'
+    message === 'User is not a participant' ||
+    message === 'Trip is full' ||
+    message === 'Participants exceed available spots' ||
+    message === 'spots cannot be lower than current participant count'
   ) {
     res.status(400).json({ message });
     return;
@@ -90,7 +93,12 @@ export const createTrip = async (req: Request, res: Response): Promise<void> => 
         destination: data.destination,
         stops: data.stops,
         startDate: data.startDate,
-        endDate: data.endDate,
+        startTime: data.startTime ?? null,
+        days: data.days,
+        spots: data.spots,
+        requireApproval: data.requireApproval,
+        distance: data.distance,
+        elevation: data.elevation,
         participantIds: data.participantIds,
       },
       userId
@@ -199,8 +207,10 @@ export const requestToJoin = async (req: Request, res: Response): Promise<void> 
 
   try {
     const tripId = String(req.params['id']);
-    await tripService.requestToJoinTrip(tripId, userId);
-    res.json({ message: 'Join request sent successfully' });
+    const { trip, status } = await tripService.requestToJoinTrip(tripId, userId);
+    const message =
+      status === 'joined' ? 'Joined trip successfully' : 'Join request sent successfully';
+    res.json({ message, status, trip });
   } catch (error) {
     respondWithError(res, error, 'Failed to send join request');
   }

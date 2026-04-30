@@ -25,7 +25,12 @@ export interface CreateTripData {
   destination: ITrip['destination'];
   stops?: ITrip['stops'];
   startDate: string | Date;
-  endDate: string | Date;
+  startTime?: string | null;
+  days: number;
+  spots: number | null;
+  requireApproval?: boolean;
+  distance?: number;
+  elevation?: number;
   participantIds?: ObjectIdLike[];
 }
 
@@ -40,7 +45,12 @@ export const createTrip = async (
     destination,
     stops,
     startDate,
-    endDate,
+    startTime,
+    days,
+    spots,
+    requireApproval,
+    distance,
+    elevation,
     participantIds,
   } = tripData;
 
@@ -54,11 +64,13 @@ export const createTrip = async (
     }
   }
 
-  const start = new Date(startDate);
-  const end = new Date(endDate);
-  if (start >= end) {
-    throw new Error('End date must be after start date');
+  // Creator counts as one occupied spot. `null` spots = unlimited.
+  const initialParticipantCount = 1 + (participantIds?.length ?? 0);
+  if (spots != null && initialParticipantCount > spots) {
+    throw new Error('Participants exceed available spots');
   }
+
+  const start = new Date(startDate);
 
   const tripDoc = new Trip({
     title,
@@ -75,7 +87,12 @@ export const createTrip = async (
       })),
     ],
     startDate: start,
-    endDate: end,
+    startTime: startTime ?? null,
+    days,
+    spots,
+    requireApproval: requireApproval ?? true,
+    ...(distance !== undefined ? { distance } : {}),
+    ...(elevation !== undefined ? { elevation } : {}),
   });
 
   tripDoc.trackingGroupId = `trip_${tripDoc._id.toString().slice(-8)}`;
@@ -146,7 +163,12 @@ export interface UpdateTripData {
   destination?: ITrip['destination'];
   stops?: ITrip['stops'];
   startDate?: string | Date;
-  endDate?: string | Date;
+  startTime?: string | null;
+  days?: number;
+  spots?: number | null;
+  requireApproval?: boolean;
+  distance?: number;
+  elevation?: number;
 }
 
 export const updateTrip = async (
@@ -167,23 +189,30 @@ export const updateTrip = async (
     'destination',
     'stops',
     'startDate',
-    'endDate',
+    'startTime',
+    'days',
+    'spots',
+    'requireApproval',
+    'distance',
+    'elevation',
   ];
 
   for (const key of allowed) {
     if (updates[key] !== undefined) {
-      if (key === 'startDate' || key === 'endDate') {
-        (trip as TripDocument)[key] = new Date(updates[key] as string | Date);
+      if (key === 'startDate') {
+        trip.startDate = new Date(updates[key] as string | Date);
       } else {
         (trip as unknown as Record<string, unknown>)[key] = updates[key];
       }
     }
   }
 
-  if (updates.startDate || updates.endDate) {
-    const start = new Date(trip.startDate);
-    const end = new Date(trip.endDate);
-    if (start >= end) throw new Error('End date must be after start date');
+  if (
+    updates.spots !== undefined &&
+    updates.spots !== null &&
+    trip.participants.length > updates.spots
+  ) {
+    throw new Error('spots cannot be lower than current participant count');
   }
 
   await trip.save();
@@ -210,6 +239,14 @@ export const addParticipants = async (
     throw new Error('One or more users not found');
   }
 
+  const newcomers = participantIds.filter((id) => !trip.isParticipant(id));
+  if (
+    trip.spots != null &&
+    trip.participants.length + newcomers.length > trip.spots
+  ) {
+    throw new Error('Trip is full');
+  }
+
   for (const participantId of participantIds) {
     try {
       await trip.addParticipant(participantId);
@@ -231,18 +268,44 @@ export const addParticipants = async (
 export const requestToJoinTrip = async (
   tripId: ObjectIdLike,
   userId: ObjectIdLike
-): Promise<TripDocument> => {
+): Promise<{ trip: TripDocument; status: 'joined' | 'requested' }> => {
   const trip = await Trip.findOne({ _id: tripId, isActive: true });
   if (!trip) throw new Error('Trip not found');
   if (trip.isCreator(userId)) {
     throw new Error('You are the creator of this trip');
   }
-
-  await trip.addJoinRequest(userId);
+  if (trip.isParticipant(userId)) {
+    throw new Error('User is already a participant');
+  }
 
   const requester = await User.findById(userId).select('fName lName email');
   const requesterName =
     `${requester?.fName ?? ''} ${requester?.lName ?? ''}`.trim() || 'Someone';
+
+  if (!trip.requireApproval) {
+    if (trip.spots != null && trip.participants.length >= trip.spots) {
+      throw new Error('Trip is full');
+    }
+    await trip.addParticipant(userId);
+    await trip.removeJoinRequest(userId);
+
+    await notificationService.createNotification(
+      trip.createdBy,
+      'trip.join_accepted',
+      'New trip participant',
+      `${requesterName} joined ${trip.title}`,
+      {
+        tripId: trip._id,
+        tripTitle: trip.title,
+        requesterId: userId,
+        requesterName,
+      }
+    );
+
+    return { trip, status: 'joined' };
+  }
+
+  await trip.addJoinRequest(userId);
 
   await notificationService.createNotification(
     trip.createdBy,
@@ -257,7 +320,7 @@ export const requestToJoinTrip = async (
     }
   );
 
-  return trip;
+  return { trip, status: 'requested' };
 };
 
 export const acceptJoinRequest = async (
@@ -272,6 +335,9 @@ export const acceptJoinRequest = async (
   }
   if (!trip.hasJoinRequest(requesterId)) {
     throw new Error('No pending join request from this user');
+  }
+  if (trip.spots != null && trip.participants.length >= trip.spots) {
+    throw new Error('Trip is full');
   }
 
   await trip.addParticipant(requesterId);
